@@ -11,9 +11,7 @@ export type DictionaryData = {
 export async function saveDictionaryToFile(data: DictionaryData): Promise<void> {
   try {
     const jsonData = JSON.stringify(data);
-    await FileSystem.writeAsStringAsync(DICTIONARY_FILE_PATH, jsonData, {
-      encoding: FileSystem.EncodingType.UTF8,
-    });
+    await FileSystem.writeAsStringAsync(DICTIONARY_FILE_PATH, jsonData);
   } catch (error) {
     console.error('Error saving dictionary to file:', error);
     throw error;
@@ -28,10 +26,7 @@ export async function loadDictionaryFromFile(): Promise<DictionaryData | null> {
       return null;
     }
     
-    const jsonData = await FileSystem.readAsStringAsync(DICTIONARY_FILE_PATH, {
-      encoding: FileSystem.EncodingType.UTF8,
-    });
-    
+    const jsonData = await FileSystem.readAsStringAsync(DICTIONARY_FILE_PATH);
     return JSON.parse(jsonData);
   } catch (error) {
     console.error('Error loading dictionary from file:', error);

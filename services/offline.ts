@@ -1,3 +1,4 @@
+// services/offline.ts
 import { Platform } from 'react-native';
 import { loadDictionaryFromFile, DictionaryData } from '../utils/storage';
 import { normalizeWord } from '../utils/normalize';
