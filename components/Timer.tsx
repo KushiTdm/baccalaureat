@@ -1,3 +1,4 @@
+//components/Timer.tsx
 import { View, Text, StyleSheet } from 'react-native';
 import { useEffect } from 'react';
 import { useGameStore } from '../store/gameStore';

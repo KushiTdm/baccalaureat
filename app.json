@@ -9,7 +9,11 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "L'application a besoin du Bluetooth pour le mode multijoueur",
+        "NSBluetoothPeripheralUsageDescription": "L'application a besoin du Bluetooth pour se connecter aux autres joueurs"
+      }
     },
     "web": {
       "bundler": "metro",
@@ -20,7 +24,14 @@
       "expo-router",
       "expo-font",
       "expo-web-browser",
-      "react-native-ble-plx"
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": ["peripheral", "central"],
+          "bluetoothAlwaysPermission": "L'application a besoin du Bluetooth pour le mode multijoueur"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
@@ -34,7 +45,16 @@
       "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFmbG5jc2lrZnNrZm5ubHVlY2hpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAwMTA5NTksImV4cCI6MjA3NTU4Njk1OX0.9YfkVljNjc5e4ocVGfLEN8UohpA3x_33iDoSYqx_9U4"
     },
     "android": {
-      "package": "com.tokami.boltexponativewind"
+      "package": "com.tokami.boltexponativewind",
+      "permissions": [
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_ADVERTISE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
     }
   }
 }

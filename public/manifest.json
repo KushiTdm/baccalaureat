@@ -1,0 +1,9 @@
+{
+  "name": "Petit Bac",
+  "short_name": "Petit Bac",
+  "description": "Jeu de Baccalauréat - Trouvez des mots commençant par une lettre",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#007AFF"
+}

@@ -7,7 +7,7 @@ import { getCategories, downloadDictionary, isOnline } from '../services/api';
 import { isDictionaryDownloaded } from '../utils/storage';
 import { initOfflineDatabase, loadOfflineDictionary } from '../services/offline';
 import { useGameStore } from '../store/gameStore';
-import { Download, Wifi, WifiOff, Users, Globe, Bluetooth } from 'lucide-react-native';
+import { Download, Wifi, WifiOff, Users } from 'lucide-react-native';
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
@@ -57,14 +57,6 @@ export default function HomeScreen() {
 
   async function handleStartMultiplayer() {
     router.push('/multiplayer-setup');
-  }
-
-  async function handleStartOnline() {
-    if (!online) {
-      Alert.alert('Hors ligne', 'Vous devez être connecté pour jouer en ligne');
-      return;
-    }
-    router.push('/online-setup');
   }
 
   async function handleDownloadDictionary() {
@@ -132,24 +124,12 @@ export default function HomeScreen() {
             loading={loading}
           />
 
-          <View style={styles.multiplayerSection}>
-            <Text style={styles.sectionTitle}>Modes multijoueur</Text>
-            
-            <Button
-              title="Jeu en ligne"
-              onPress={handleStartOnline}
-              variant="secondary"
-              icon={<Globe size={20} color="#007AFF" />}
-              disabled={!online}
-            />
-
-            <Button
-              title="Bluetooth (local)"
-              onPress={handleStartMultiplayer}
-              variant="secondary"
-              icon={<Bluetooth size={20} color="#007AFF" />}
-            />
-          </View>
+          <Button
+            title="Mode multijoueur"
+            onPress={handleStartMultiplayer}
+            variant="secondary"
+            icon={<Users size={20} color="#007AFF" />}
+          />
 
           <Button
             title={hasOfflineDict ? 'Mettre à jour le dictionnaire' : 'Télécharger le dictionnaire'}
@@ -163,12 +143,6 @@ export default function HomeScreen() {
         {!hasOfflineDict && (
           <Text style={styles.warningText}>
             Téléchargez le dictionnaire pour jouer hors ligne
-          </Text>
-        )}
-
-        {!online && (
-          <Text style={styles.warningText}>
-            Le mode en ligne nécessite une connexion internet
           </Text>
         )}
       </ScrollView>
@@ -232,7 +206,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-   infoTitle: {
+  infoTitle: {
     fontSize: 20,
     fontWeight: '600',
     color: '#333',
@@ -252,15 +226,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#ff9800',
     fontWeight: '500',
-  },
-  multiplayerSection: {
-    gap: 12,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginTop: 8,
-    marginBottom: 4,
   },
 });

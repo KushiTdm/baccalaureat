@@ -1,31 +1,48 @@
-//app/game.tsx
+// app/multiplayer-game.tsx
 import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useGameStore } from '../store/gameStore';
 import InputWord from '../components/InputWord';
 import Timer from '../components/Timer';
 import Button from '../components/Button';
 import { validateWord } from '../services/api';
+import { bluetoothService, GameMessage } from '../services/bluetooth';
 import { GameResult } from '../store/gameStore';
 
-export default function GameScreen() {
+export default function MultiplayerGameScreen() {
   const router = useRouter();
   const {
     currentLetter,
     categories,
     answers,
     setAnswer,
-    setResults,
-    setScore,
+    setMultiplayerResults,
     endGame,
+    opponentName,
   } = useGameStore();
 
   const [submitting, setSubmitting] = useState(false);
+  const [opponentFinished, setOpponentFinished] = useState(false);
+
+  useEffect(() => {
+    // Listen for opponent messages
+    bluetoothService.setMessageListener(handleOpponentMessage);
+
+    return () => {
+      bluetoothService.setMessageListener(() => {});
+    };
+  }, [answers]);
 
   if (!currentLetter || categories.length === 0) {
     router.replace('/');
     return null;
+  }
+
+  function handleOpponentMessage(message: GameMessage) {
+    if (message.type === 'ANSWER_SUBMIT') {
+      setOpponentFinished(true);
+    }
   }
 
   async function handleTimeUp() {
@@ -37,15 +54,16 @@ export default function GameScreen() {
     endGame();
 
     try {
-      const results: GameResult[] = [];
-      let totalScore = 0;
+      // Validate player's answers
+      const myResults: GameResult[] = [];
+      let myScore = 0;
 
       for (const category of categories) {
         const answer = answers.find((a) => a.categorieId === category.id);
         const word = answer?.word || '';
 
         if (!word.trim()) {
-          results.push({
+          myResults.push({
             categorieId: category.id,
             categorieName: category.nom,
             word: '',
@@ -56,7 +74,7 @@ export default function GameScreen() {
         }
 
         if (!word.toLowerCase().startsWith(currentLetter.toLowerCase())) {
-          results.push({
+          myResults.push({
             categorieId: category.id,
             categorieName: category.nom,
             word,
@@ -68,9 +86,9 @@ export default function GameScreen() {
 
         const isValid = await validateWord(word, category.id);
         const points = isValid ? 10 : 0;
-        totalScore += points;
+        myScore += points;
 
-        results.push({
+        myResults.push({
           categorieId: category.id,
           categorieName: category.nom,
           word,
@@ -79,14 +97,44 @@ export default function GameScreen() {
         });
       }
 
-      setResults(results);
-      setScore(totalScore);
-      router.push('/results');
+      // Send results to opponent
+      await bluetoothService.sendMessage({
+        type: 'ANSWER_SUBMIT',
+        data: {
+          results: myResults,
+          score: myScore,
+        },
+      });
+
+      // Wait for opponent if not finished yet
+      if (!opponentFinished) {
+        Alert.alert(
+          'Réponses envoyées',
+          "En attente de votre adversaire...",
+          [{ text: 'OK' }]
+        );
+
+        // Wait for opponent response
+        await waitForOpponent();
+      }
+
+      setMultiplayerResults(myResults, myScore);
+      router.push('/multiplayer-results');
     } catch (error) {
       Alert.alert('Erreur', 'Impossible de valider les réponses');
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function waitForOpponent(): Promise<void> {
+    return new Promise((resolve) => {
+      bluetoothService.setMessageListener((message) => {
+        if (message.type === 'ANSWER_SUBMIT') {
+          resolve();
+        }
+      });
+    });
   }
 
   return (
@@ -95,6 +143,13 @@ export default function GameScreen() {
         <View style={styles.letterContainer}>
           <Text style={styles.letterLabel}>Lettre</Text>
           <Text style={styles.letter}>{currentLetter.toUpperCase()}</Text>
+        </View>
+        <View style={styles.opponentInfo}>
+          <Text style={styles.opponentLabel}>VS</Text>
+          <Text style={styles.opponentName}>{opponentName}</Text>
+          {opponentFinished && (
+            <Text style={styles.opponentStatus}>✓ Terminé</Text>
+          )}
         </View>
         <Timer onTimeUp={handleTimeUp} />
       </View>
@@ -139,9 +194,6 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingBottom: 20,
     paddingHorizontal: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -150,6 +202,7 @@ const styles = StyleSheet.create({
   },
   letterContainer: {
     alignItems: 'center',
+    marginBottom: 12,
   },
   letterLabel: {
     fontSize: 14,
@@ -160,6 +213,25 @@ const styles = StyleSheet.create({
     fontSize: 48,
     fontWeight: '700',
     color: '#007AFF',
+  },
+  opponentInfo: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  opponentLabel: {
+    fontSize: 12,
+    color: '#999',
+    marginBottom: 4,
+  },
+  opponentName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+  },
+  opponentStatus: {
+    fontSize: 12,
+    color: '#4caf50',
+    marginTop: 4,
   },
   scrollView: {
     flex: 1,

@@ -84,5 +84,6 @@ INSERT INTO categories (nom) VALUES
   ('Animal'),
   ('Métier'),
   ('Fruit ou légume'),
-  ('Film')
+  ('Film'),
+  ('Sport')
 ON CONFLICT (nom) DO NOTHING;

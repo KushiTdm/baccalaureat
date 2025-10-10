@@ -24,6 +24,13 @@ type GameState = {
   score: number;
   isPlaying: boolean;
   timeRemaining: number;
+  
+  // Multiplayer state
+  isMultiplayer: boolean;
+  isHost: boolean;
+  opponentName: string | null;
+  opponentResults: GameResult[] | null;
+  opponentScore: number;
 
   setLetter: (letter: string) => void;
   setCategories: (categories: Categorie[]) => void;
@@ -31,6 +38,9 @@ type GameState = {
   setResults: (results: GameResult[]) => void;
   setScore: (score: number) => void;
   startGame: (letter: string, categories: Categorie[]) => void;
+  startMultiplayerGame: (letter: string, categories: Categorie[], isHost: boolean, opponentName: string) => void;
+  setMultiplayerResults: (myResults: GameResult[], myScore: number) => void;
+  setOpponentResults: (results: GameResult[], score: number) => void;
   endGame: () => void;
   resetGame: () => void;
   setTimeRemaining: (time: number) => void;
@@ -44,6 +54,13 @@ export const useGameStore = create<GameState>((set) => ({
   score: 0,
   isPlaying: false,
   timeRemaining: 120,
+  
+  // Multiplayer state
+  isMultiplayer: false,
+  isHost: false,
+  opponentName: null,
+  opponentResults: null,
+  opponentScore: 0,
 
   setLetter: (letter) => set({ currentLetter: letter }),
 
@@ -84,6 +101,39 @@ export const useGameStore = create<GameState>((set) => ({
       score: 0,
       isPlaying: true,
       timeRemaining: 120,
+      isMultiplayer: false,
+      isHost: false,
+      opponentName: null,
+      opponentResults: null,
+      opponentScore: 0,
+    }),
+
+  startMultiplayerGame: (letter, categories, isHost, opponentName) =>
+    set({
+      currentLetter: letter,
+      categories,
+      answers: [],
+      results: null,
+      score: 0,
+      isPlaying: true,
+      timeRemaining: 120,
+      isMultiplayer: true,
+      isHost,
+      opponentName,
+      opponentResults: null,
+      opponentScore: 0,
+    }),
+
+  setMultiplayerResults: (myResults, myScore) =>
+    set({
+      results: myResults,
+      score: myScore,
+    }),
+
+  setOpponentResults: (results, score) =>
+    set({
+      opponentResults: results,
+      opponentScore: score,
     }),
 
   endGame: () => set({ isPlaying: false }),
@@ -97,6 +147,11 @@ export const useGameStore = create<GameState>((set) => ({
       score: 0,
       isPlaying: false,
       timeRemaining: 120,
+      isMultiplayer: false,
+      isHost: false,
+      opponentName: null,
+      opponentResults: null,
+      opponentScore: 0,
     }),
 
   setTimeRemaining: (time) => set({ timeRemaining: time }),

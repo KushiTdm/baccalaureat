@@ -1,31 +1,55 @@
-import { TouchableOpacity, Text, StyleSheet, ActivityIndicator } from 'react-native';
+// components/Button.tsx
+import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, View } from 'react-native';
+import { ReactNode } from 'react';
 
 type ButtonProps = {
   title: string;
   onPress: () => void;
   variant?: 'primary' | 'secondary';
-  disabled?: boolean;
   loading?: boolean;
+  disabled?: boolean;
+  icon?: ReactNode;
 };
 
-export default function Button({ title, onPress, variant = 'primary', disabled = false, loading = false }: ButtonProps) {
+export default function Button({
+  title,
+  onPress,
+  variant = 'primary',
+  loading = false,
+  disabled = false,
+  icon,
+}: ButtonProps) {
+  const isPrimary = variant === 'primary';
+
   return (
     <TouchableOpacity
       style={[
         styles.button,
-        variant === 'primary' ? styles.primary : styles.secondary,
-        (disabled || loading) && styles.disabled,
+        isPrimary ? styles.primaryButton : styles.secondaryButton,
+        (disabled || loading) && styles.disabledButton,
       ]}
       onPress={onPress}
       disabled={disabled || loading}
       activeOpacity={0.7}
     >
       {loading ? (
-        <ActivityIndicator color={variant === 'primary' ? '#fff' : '#007AFF'} />
+        <ActivityIndicator
+          color={isPrimary ? '#fff' : '#007AFF'}
+          size="small"
+        />
       ) : (
-        <Text style={[styles.text, variant === 'secondary' && styles.secondaryText]}>
-          {title}
-        </Text>
+        <View style={styles.content}>
+          {icon && <View style={styles.iconContainer}>{icon}</View>}
+          <Text
+            style={[
+              styles.text,
+              isPrimary ? styles.primaryText : styles.secondaryText,
+              (disabled || loading) && styles.disabledText,
+            ]}
+          >
+            {title}
+          </Text>
+        </View>
       )}
     </TouchableOpacity>
   );
@@ -33,30 +57,44 @@ export default function Button({ title, onPress, variant = 'primary', disabled =
 
 const styles = StyleSheet.create({
   button: {
-    paddingVertical: 14,
+    paddingVertical: 16,
     paddingHorizontal: 24,
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 50,
+    minHeight: 56,
   },
-  primary: {
+  primaryButton: {
     backgroundColor: '#007AFF',
   },
-  secondary: {
+  secondaryButton: {
     backgroundColor: '#fff',
     borderWidth: 2,
     borderColor: '#007AFF',
   },
-  disabled: {
+  disabledButton: {
     opacity: 0.5,
   },
+  content: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  iconContainer: {
+    marginRight: 4,
+  },
   text: {
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '600',
+  },
+  primaryText: {
     color: '#fff',
   },
   secondaryText: {
     color: '#007AFF',
+  },
+  disabledText: {
+    opacity: 0.7,
   },
 });
