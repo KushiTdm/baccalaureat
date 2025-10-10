@@ -243,81 +243,101 @@ class OnlineService {
 
   // Subscribe to room updates
   subscribeToRoom(roomId: string, callbacks: RoomSubscriptionCallbacks) {
-    this.subscription = supabase
-      .channel(`room:${roomId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'game_room_players',
-          filter: `room_id=eq.${roomId}`,
-        },
-        (payload) => {
-          callbacks.onPlayerJoined(payload.new as GameRoomPlayer);
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'game_room_players',
-          filter: `room_id=eq.${roomId}`,
-        },
-        (payload) => {
-          callbacks.onPlayerLeft((payload.old as GameRoomPlayer).id);
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'game_rooms',
-          filter: `id=eq.${roomId}`,
-        },
-        (payload) => {
-          const room = payload.new as GameRoom;
-          if (room.status === 'playing') { // ✅ Corrigé
-            callbacks.onGameStarted();
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'game_room_players',
-          filter: `room_id=eq.${roomId}`,
-        },
-        (payload) => {
-          const player = payload.new as GameRoomPlayer;
-          if (player.finished_at) {
-            callbacks.onPlayerFinished(player);
-          }
-        }
-      );
-
-    // ✅ Optionnel : écouter les réponses en temps réel
-    if (callbacks.onAnswerSubmitted) {
-      this.subscription.on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'game_room_answers',
-          filter: `room_id=eq.${roomId}`,
-        },
-        (payload) => {
-          callbacks.onAnswerSubmitted!(payload.new as GameRoomAnswer);
-        }
-      );
-    }
-
-    this.subscription.subscribe();
+  console.log('🔔 Souscription à la room:', roomId);
+  
+  // Nettoyer l'ancienne souscription si elle existe
+  if (this.subscription) {
+    supabase.removeChannel(this.subscription);
   }
+
+  this.subscription = supabase
+    .channel(`room:${roomId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'game_room_players',
+        filter: `room_id=eq.${roomId}`,
+      },
+      (payload) => {
+        console.log('✅ Nouveau joueur détecté:', payload.new);
+        callbacks.onPlayerJoined(payload.new as GameRoomPlayer);
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'game_room_players',
+        filter: `room_id=eq.${roomId}`,
+      },
+      (payload) => {
+        console.log('❌ Joueur parti:', payload.old);
+        callbacks.onPlayerLeft((payload.old as GameRoomPlayer).id);
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'game_rooms',
+        filter: `id=eq.${roomId}`,
+      },
+      (payload) => {
+        console.log('🎮 Mise à jour de la room:', payload.new);
+        const room = payload.new as GameRoom;
+        if (room.status === 'playing') {
+          callbacks.onGameStarted();
+        }
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'game_room_players',
+        filter: `room_id=eq.${roomId}`,
+      },
+      (payload) => {
+        const player = payload.new as GameRoomPlayer;
+        if (player.finished_at) {
+          console.log('🏁 Joueur a terminé:', player);
+          callbacks.onPlayerFinished(player);
+        }
+      }
+    );
+
+  // ✅ Optionnel : écouter les réponses en temps réel
+  if (callbacks.onAnswerSubmitted) {
+    this.subscription.on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'game_room_answers',
+        filter: `room_id=eq.${roomId}`,
+      },
+      (payload) => {
+        console.log('📝 Nouvelle réponse:', payload.new);
+        callbacks.onAnswerSubmitted!(payload.new as GameRoomAnswer);
+      }
+    );
+  }
+
+  // ✅ IMPORTANT : Subscribe APRÈS avoir ajouté tous les listeners
+  this.subscription.subscribe((status: string) => {
+    console.log('📡 Statut de souscription:', status);
+    if (status === 'SUBSCRIBED') {
+      console.log('✅ Souscription active pour la room:', roomId);
+    } else if (status === 'CHANNEL_ERROR') {
+      console.error('❌ Erreur de souscription pour la room:', roomId);
+    }
+  });
+}
 
   // Unsubscribe from room updates
   unsubscribeFromRoom() {
