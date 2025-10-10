@@ -27,39 +27,46 @@ export default function OnlineSetupScreen() {
   const [players, setPlayers] = useState<GameRoomPlayer[]>([]);
 
   useEffect(() => {
-    if (waitingRoom) {
-      loadPlayers();
+  if (waitingRoom) {
+    // Charger les joueurs d'abord, PUIS souscrire
+    loadPlayers().then(() => {
       subscribeToRoom();
-    }
-
-    return () => {
-      onlineService.unsubscribeFromRoom();
-    };
-  }, [waitingRoom]);
-
-  async function loadPlayers() {
-    if (!waitingRoom) return;
-    
-    try {
-      const playersList = await onlineService.getPlayers(waitingRoom.roomId);
-      setPlayers(playersList);
-    } catch (error) {
-      console.error('Error loading players:', error);
-    }
+    });
   }
 
-  function subscribeToRoom() {
+  return () => {
+    onlineService.unsubscribeFromRoom();
+  };
+}, [waitingRoom]);
+
+// ✅ La fonction loadPlayers reste IDENTIQUE (pas de changement de nom)
+async function loadPlayers() {
+  if (!waitingRoom) return;
+  
+  try {
+    const playersList = await onlineService.getPlayers(waitingRoom.roomId);
+    setPlayers(playersList);
+  } catch (error) {
+    console.error('Error loading players:', error);
+  }
+}
+
+// ✅ MODIFIER subscribeToRoom pour éviter les doublons :
+function subscribeToRoom() {
   if (!waitingRoom) return;
 
   onlineService.subscribeToRoom(waitingRoom.roomId, {
     onPlayerJoined: (player) => {
-      setPlayers(prev => [...prev, player]);
+      // Vérifier que le joueur n'existe pas déjà
+      setPlayers(prev => {
+        const exists = prev.find(p => p.id === player.id);
+        if (exists) return prev;
+        return [...prev, player];
+      });
     },
     onPlayerLeft: (playerId) => {
-      // ✅ Retire le joueur de la liste
       setPlayers(prev => prev.filter(p => p.id !== playerId));
       
-      // Si l'hôte est parti, retour au menu
       const wasHost = players.find(p => p.id === playerId)?.is_host;
       if (wasHost) {
         Alert.alert(
@@ -77,7 +84,7 @@ export default function OnlineSetupScreen() {
     onGameStarted: () => {
       handleGameStart();
     },
-    onPlayerFinished: () => {}, // Requis par l'interface
+    onPlayerFinished: () => {},
   });
 }
 

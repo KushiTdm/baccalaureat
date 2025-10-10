@@ -68,24 +68,29 @@ export default function HomeScreen() {
   }
 
   async function handleDownloadDictionary() {
-    if (!online) {
-      Alert.alert('Hors ligne', 'Vous devez être connecté pour télécharger le dictionnaire');
-      return;
-    }
-
-    setDownloading(true);
-    try {
-      await downloadDictionary();
-      await initOfflineDatabase();
-      await loadOfflineDictionary();
-      setHasOfflineDict(true);
-      Alert.alert('Succès', 'Le dictionnaire a été téléchargé avec succès');
-    } catch (error) {
-      Alert.alert('Erreur', 'Impossible de télécharger le dictionnaire');
-    } finally {
-      setDownloading(false);
-    }
+  if (!online) {
+    Alert.alert('Hors ligne', 'Vous devez être connecté pour télécharger le dictionnaire');
+    return;
   }
+
+  setDownloading(true);
+  try {
+    await downloadDictionary();
+    await initOfflineDatabase();
+    await loadOfflineDictionary();
+    setHasOfflineDict(true);
+    Alert.alert('Succès', 'Le dictionnaire a été téléchargé avec succès');
+  } catch (error: any) {
+    console.error('Download error:', error);
+    // Afficher le vrai message d'erreur
+    Alert.alert(
+      'Erreur', 
+      error.message || 'Impossible de télécharger le dictionnaire'
+    );
+  } finally {
+    setDownloading(false);
+  }
+}
 
   return (
     <View style={styles.container}>
