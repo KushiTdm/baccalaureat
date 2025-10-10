@@ -1,22 +1,24 @@
 // app/online-setup.tsx
-import { View, Text, StyleSheet, TextInput, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Alert, ActivityIndicator, FlatList, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import Button from '../components/Button';
-import { onlineService, GameRoomPlayer } from '../services/online';
+import { onlineService, GameRoom, GameRoomPlayer } from '../services/online';
 import { useGameStore } from '../store/gameStore';
 import { getCategories } from '../services/api';
-import { Globe, UserPlus, Users } from 'lucide-react-native';
+import { Globe, UserPlus, Users, Play, RefreshCw } from 'lucide-react-native';
+import { supabase } from '../lib/supabase';
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 export default function OnlineSetupScreen() {
   const router = useRouter();
   const { startMultiplayerGame } = useGameStore();
-  const [mode, setMode] = useState<'menu' | 'create' | 'join'>('menu');
+  const [mode, setMode] = useState<'menu' | 'create'>('menu');
   const [playerName, setPlayerName] = useState('');
-  const [roomCode, setRoomCode] = useState('');
   const [loading, setLoading] = useState(false);
+  const [availableRooms, setAvailableRooms] = useState<GameRoom[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
   const [waitingRoom, setWaitingRoom] = useState<{
     roomId: string;
     roomCode: string;
@@ -27,66 +29,121 @@ export default function OnlineSetupScreen() {
   const [players, setPlayers] = useState<GameRoomPlayer[]>([]);
 
   useEffect(() => {
-  if (waitingRoom) {
-    // Charger les joueurs d'abord, PUIS souscrire
-    loadPlayers().then(() => {
-      subscribeToRoom();
-    });
+    loadAvailableRooms();
+  }, []);
+
+  useEffect(() => {
+    if (waitingRoom) {
+      // Charger les joueurs et surveiller
+      loadPlayersAndWatch();
+    }
+
+    return () => {
+      onlineService.unsubscribeFromRoom();
+    };
+  }, [waitingRoom]);
+
+  async function loadAvailableRooms() {
+    try {
+      const { data, error } = await supabase
+        .from('game_rooms')
+        .select('*')
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (error) throw error;
+
+      // Pour chaque room, compter les joueurs
+      const roomsWithCount = await Promise.all(
+        (data || []).map(async (room) => {
+          const { data: players } = await supabase
+            .from('game_room_players')
+            .select('id')
+            .eq('room_id', room.id);
+
+          return {
+            ...room,
+            playerCount: players?.length || 0,
+          };
+        })
+      );
+
+      // Filtrer les rooms qui ne sont pas pleines
+      const availableRooms = roomsWithCount.filter(r => r.playerCount < r.max_players);
+      setAvailableRooms(availableRooms as any);
+    } catch (error) {
+      console.error('Error loading rooms:', error);
+    }
   }
 
-  return () => {
-    onlineService.unsubscribeFromRoom();
-  };
-}, [waitingRoom]);
-
-// ✅ La fonction loadPlayers reste IDENTIQUE (pas de changement de nom)
-async function loadPlayers() {
-  if (!waitingRoom) return;
-  
-  try {
-    const playersList = await onlineService.getPlayers(waitingRoom.roomId);
-    setPlayers(playersList);
-  } catch (error) {
-    console.error('Error loading players:', error);
+  async function handleRefresh() {
+    setRefreshing(true);
+    await loadAvailableRooms();
+    setRefreshing(false);
   }
-}
 
-// ✅ MODIFIER subscribeToRoom pour éviter les doublons :
-function subscribeToRoom() {
-  if (!waitingRoom) return;
+  async function loadPlayersAndWatch() {
+    if (!waitingRoom) return;
 
-  onlineService.subscribeToRoom(waitingRoom.roomId, {
-    onPlayerJoined: (player) => {
-      // Vérifier que le joueur n'existe pas déjà
-      setPlayers(prev => {
-        const exists = prev.find(p => p.id === player.id);
-        if (exists) return prev;
-        return [...prev, player];
-      });
-    },
-    onPlayerLeft: (playerId) => {
-      setPlayers(prev => prev.filter(p => p.id !== playerId));
-      
-      const wasHost = players.find(p => p.id === playerId)?.is_host;
-      if (wasHost) {
-        Alert.alert(
-          'Salle fermée',
-          "L'hôte a quitté la salle",
-          [{ text: 'OK', onPress: () => {
-            onlineService.clearCurrentRoom();
-            setWaitingRoom(null);
-            setPlayers([]);
-            setMode('menu');
-          }}]
-        );
+    try {
+      // Charger les joueurs actuels
+      const playersList = await onlineService.getPlayers(waitingRoom.roomId);
+      setPlayers(playersList);
+
+      // Si 2 joueurs, lancer automatiquement
+      if (playersList.length >= 2) {
+        await handleAutoStart();
+        return;
       }
-    },
-    onGameStarted: () => {
-      handleGameStart();
-    },
-    onPlayerFinished: () => {},
-  });
-}
+
+      // Sinon, écouter les changements avec polling (plus fiable que Realtime)
+      const interval = setInterval(async () => {
+        const updatedPlayers = await onlineService.getPlayers(waitingRoom.roomId);
+        setPlayers(updatedPlayers);
+
+        if (updatedPlayers.length >= 2) {
+          clearInterval(interval);
+          await handleAutoStart();
+        }
+      }, 1000); // Vérifier toutes les secondes
+
+      // Nettoyer l'intervalle au démontage
+      return () => clearInterval(interval);
+    } catch (error) {
+      console.error('Error loading players:', error);
+    }
+  }
+
+  async function handleAutoStart() {
+    if (!waitingRoom) return;
+
+    try {
+      // Seul l'hôte démarre la partie
+      if (waitingRoom.isHost) {
+        await onlineService.startGame(waitingRoom.roomId);
+      }
+
+      // Petite pause pour laisser le statut se mettre à jour
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Charger les catégories et démarrer
+      const categories = await getCategories();
+      const opponent = players.find(p => p.id !== waitingRoom.playerId);
+
+      startMultiplayerGame(
+        waitingRoom.letter,
+        categories,
+        waitingRoom.isHost,
+        opponent?.player_name || 'Adversaire'
+      );
+
+      router.push('/online-game');
+    } catch (error) {
+      console.error('Error starting game:', error);
+      Alert.alert('Erreur', 'Impossible de démarrer la partie');
+    }
+  }
 
   async function handleCreateRoom() {
     if (!playerName.trim()) {
@@ -119,27 +176,22 @@ function subscribeToRoom() {
     }
   }
 
-  async function handleJoinRoom() {
+  async function handleJoinRoom(room: GameRoom) {
     if (!playerName.trim()) {
-      Alert.alert('Erreur', 'Veuillez entrer votre nom');
-      return;
-    }
-
-    if (!roomCode.trim() || roomCode.length !== 4) {
-      Alert.alert('Erreur', 'Le code doit contenir 4 caractères');
+      Alert.alert('Erreur', 'Veuillez entrer votre nom pour rejoindre');
       return;
     }
 
     setLoading(true);
     try {
-      const { room, player } = await onlineService.joinRoom(roomCode.trim(), playerName.trim());
+      const { room: joinedRoom, player } = await onlineService.joinRoom(room.room_code, playerName.trim());
 
       setWaitingRoom({
-        roomId: room.id,
-        roomCode: room.room_code,
+        roomId: joinedRoom.id,
+        roomCode: joinedRoom.room_code,
         playerId: player.id,
         isHost: false,
-        letter: room.letter,
+        letter: joinedRoom.letter,
       });
     } catch (error: any) {
       Alert.alert('Erreur', error.message || 'Impossible de rejoindre la salle');
@@ -148,75 +200,37 @@ function subscribeToRoom() {
     }
   }
 
-  async function handleStartGame() {
-    if (!waitingRoom) return;
-
-    if (players.length < 2) {
-      Alert.alert('Attention', 'Attendez qu\'un autre joueur rejoigne la salle');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await onlineService.startGame(waitingRoom.roomId);
-      // Game will start via subscription callback
-    } catch (error) {
-      Alert.alert('Erreur', 'Impossible de démarrer la partie');
-      setLoading(false);
-    }
-  }
-
-  async function handleGameStart() {
-    if (!waitingRoom) return;
-
-    try {
-      const categories = await getCategories();
-      const opponent = players.find(p => p.id !== waitingRoom.playerId);
-
-      startMultiplayerGame(
-        waitingRoom.letter,
-        categories,
-        waitingRoom.isHost,
-        opponent?.player_name || 'Adversaire'
-      );
-
-      router.push('/online-game');
-    } catch (error) {
-      Alert.alert('Erreur', 'Impossible de charger les catégories');
-    }
-  }
-
   function handleBack() {
-  if (waitingRoom) {
-    Alert.alert(
-      'Quitter la salle',
-      'Êtes-vous sûr de vouloir quitter ?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Quitter',
-          style: 'destructive',
-          onPress: async () => {
-            // ✅ Nettoie côté serveur
-            await onlineService.leaveRoom(waitingRoom.roomId, waitingRoom.playerId);
-            onlineService.unsubscribeFromRoom();
-            onlineService.clearCurrentRoom();
-            setWaitingRoom(null);
-            setPlayers([]);
-            setMode('menu');
+    if (waitingRoom) {
+      Alert.alert(
+        'Quitter la salle',
+        'Êtes-vous sûr de vouloir quitter ?',
+        [
+          { text: 'Annuler', style: 'cancel' },
+          {
+            text: 'Quitter',
+            style: 'destructive',
+            onPress: async () => {
+              await onlineService.leaveRoom(waitingRoom.roomId, waitingRoom.playerId);
+              onlineService.clearCurrentRoom();
+              setWaitingRoom(null);
+              setPlayers([]);
+              setMode('menu');
+              loadAvailableRooms();
+            },
           },
-        },
-      ]
-    );
-  } else {
-    if (mode === 'menu') {
-      router.back();
+        ]
+      );
     } else {
-      setMode('menu');
+      if (mode === 'menu') {
+        router.back();
+      } else {
+        setMode('menu');
+      }
     }
   }
-}
 
+  // ÉCRAN D'ATTENTE
   if (waitingRoom) {
     return (
       <View style={styles.container}>
@@ -228,13 +242,10 @@ function subscribeToRoom() {
         <View style={styles.roomCodeCard}>
           <Text style={styles.roomCodeLabel}>Code de la salle</Text>
           <Text style={styles.roomCode}>{waitingRoom.roomCode}</Text>
-          <Text style={styles.roomCodeHint}>
-            Partagez ce code avec votre adversaire
-          </Text>
         </View>
 
         <View style={styles.letterCard}>
-          <Text style={styles.letterLabel}>Lettre de la partie</Text>
+          <Text style={styles.letterLabel}>Lettre</Text>
           <Text style={styles.letter}>{waitingRoom.letter}</Text>
         </View>
 
@@ -262,25 +273,18 @@ function subscribeToRoom() {
               </Text>
             </View>
           )}
-        </View>
 
-        <View style={styles.buttonContainer}>
-          {waitingRoom.isHost && (
-            <Button
-              title="Lancer la partie"
-              onPress={handleStartGame}
-              loading={loading}
-              disabled={players.length < 2}
-            />
-          )}
-          {!waitingRoom.isHost && players.length >= 2 && (
-            <View style={styles.waitingCard}>
-              <ActivityIndicator size="small" color="#007AFF" />
-              <Text style={styles.waitingText}>
-                En attente du lancement par l'hôte...
+          {players.length >= 2 && (
+            <View style={styles.startingCard}>
+              <ActivityIndicator size="small" color="#4caf50" />
+              <Text style={styles.startingText}>
+                Lancement de la partie...
               </Text>
             </View>
           )}
+        </View>
+
+        <View style={styles.buttonContainer}>
           <Button
             title="Quitter"
             onPress={handleBack}
@@ -291,6 +295,7 @@ function subscribeToRoom() {
     );
   }
 
+  // ÉCRAN CRÉATION
   if (mode === 'create') {
     return (
       <View style={styles.container}>
@@ -313,8 +318,7 @@ function subscribeToRoom() {
 
         <View style={styles.infoCard}>
           <Text style={styles.infoText}>
-            Une salle sera créée avec un code unique.{'\n'}
-            Partagez ce code avec un autre joueur pour commencer.
+            La partie se lancera automatiquement dès qu'un autre joueur rejoindra votre salle.
           </Text>
         </View>
 
@@ -334,75 +338,75 @@ function subscribeToRoom() {
     );
   }
 
-  if (mode === 'join') {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <UserPlus size={48} color="#007AFF" />
-          <Text style={styles.title}>Rejoindre une salle</Text>
-        </View>
-
-        <View style={styles.formCard}>
-          <Text style={styles.label}>Votre nom</Text>
-          <TextInput
-            style={styles.input}
-            value={playerName}
-            onChangeText={setPlayerName}
-            placeholder="Entrez votre nom"
-            maxLength={20}
-            autoCapitalize="words"
-          />
-
-          <Text style={[styles.label, { marginTop: 20 }]}>Code de la salle</Text>
-          <TextInput
-            style={[styles.input, styles.codeInput]}
-            value={roomCode}
-            onChangeText={(text) => setRoomCode(text.toUpperCase())}
-            placeholder="XXXX"
-            maxLength={4}
-            autoCapitalize="characters"
-          />
-        </View>
-
-        <View style={styles.buttonContainer}>
-          <Button
-            title="Rejoindre"
-            onPress={handleJoinRoom}
-            loading={loading}
-          />
-          <Button
-            title="Retour"
-            onPress={handleBack}
-            variant="secondary"
-          />
-        </View>
-      </View>
-    );
-  }
-
+  // ÉCRAN MENU PRINCIPAL
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Globe size={48} color="#007AFF" />
         <Text style={styles.title}>Jeu en ligne</Text>
-        <Text style={styles.subtitle}>Jouez avec d'autres joueurs</Text>
+        <Text style={styles.subtitle}>Trouvez ou créez une salle</Text>
       </View>
 
-      <View style={styles.infoCard}>
-        <Text style={styles.infoText}>
-          Créez une salle pour inviter un ami ou rejoignez une salle existante avec un code.
-        </Text>
+      <View style={styles.formCard}>
+        <Text style={styles.label}>Votre nom</Text>
+        <TextInput
+          style={styles.input}
+          value={playerName}
+          onChangeText={setPlayerName}
+          placeholder="Entrez votre nom"
+          maxLength={20}
+          autoCapitalize="words"
+        />
+      </View>
+
+      <View style={styles.roomsSection}>
+        <View style={styles.roomsHeader}>
+          <Text style={styles.roomsTitle}>Salles disponibles</Text>
+          <Button
+            title=""
+            onPress={handleRefresh}
+            variant="secondary"
+            icon={<RefreshCw size={20} color="#007AFF" />}
+          />
+        </View>
+
+        {availableRooms.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyText}>Aucune salle disponible</Text>
+            <Text style={styles.emptySubtext}>Créez-en une nouvelle !</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={availableRooms}
+            keyExtractor={(item) => item.id}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+            }
+            renderItem={({ item }) => (
+              <View style={styles.roomItemCard}>
+                <View style={styles.roomInfo}>
+                  <Text style={styles.roomItemCode}>{item.room_code}</Text>
+                  <Text style={styles.roomItemHost}>Hôte: {item.host_player_name}</Text>
+                  <Text style={styles.roomItemLetter}>Lettre: {item.letter}</Text>
+                </View>
+                <Button
+                  title="Rejoindre"
+                  onPress={() => handleJoinRoom(item)}
+                  icon={<Play size={16} color="#fff" />}
+                  disabled={loading}
+                />
+              </View>
+            )}
+            style={styles.roomsList}
+          />
+        )}
       </View>
 
       <View style={styles.buttonContainer}>
         <Button
-          title="Créer une salle"
+          title="Créer une nouvelle salle"
           onPress={() => setMode('create')}
-        />
-        <Button
-          title="Rejoindre une salle"
-          onPress={() => setMode('join')}
-          variant="secondary"
+          icon={<UserPlus size={20} color="#fff" />}
         />
         <Button
           title="Retour"
@@ -460,12 +464,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#333',
   },
-  codeInput: {
-    fontSize: 24,
-    fontWeight: '600',
-    textAlign: 'center',
-    letterSpacing: 8,
-  },
   infoCard: {
     backgroundColor: '#e3f2fd',
     borderRadius: 12,
@@ -503,12 +501,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#007AFF',
     letterSpacing: 8,
-  },
-  roomCodeHint: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 8,
-    textAlign: 'center',
   },
   letterCard: {
     backgroundColor: '#fff',
@@ -591,4 +583,93 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
   },
-  });
+  startingCard: {
+    backgroundColor: '#e8f5e9',
+    borderRadius: 12,
+    padding: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  startingText: {
+    fontSize: 16,
+    color: '#4caf50',
+    fontWeight: '600',
+  },
+  roomsSection: {
+    flex: 1,
+    marginBottom: 20,
+  },
+  roomsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  roomsTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+  },
+  roomsList: {
+    flex: 1,
+  },
+  roomItemCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  roomInfo: {
+    flex: 1,
+  },
+  roomItemCode: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#007AFF',
+    marginBottom: 4,
+  },
+  roomItemHost: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 2,
+  },
+  roomItemLetter: {
+    fontSize: 14,
+    color: '#666',
+  },
+  emptyCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 32,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 4,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: '#999',
+  },
+});
