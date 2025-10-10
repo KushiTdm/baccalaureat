@@ -1,16 +1,17 @@
-// services/online.ts
+// services/online.ts - VERSION COMPLÈTE avec système de manches
 import { supabase } from '../lib/supabase';
 
 export interface GameRoom {
   id: string;
   room_code: string;
   letter: string;
-  host_player_name: string; // ✅ Corrigé : correspondance avec SQL
-  status: 'waiting' | 'playing' | 'finished'; // ✅ Corrigé : 'playing' au lieu de 'in_progress'
-  max_players: number; // ✅ Ajouté
+  host_player_name: string;
+  status: 'waiting' | 'playing' | 'finished';
+  max_players: number;
+  current_round_number: number;
   created_at: string;
-  started_at: string | null; // ✅ Ajouté
-  finished_at: string | null; // ✅ Ajouté
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 export interface GameRoomPlayer {
@@ -18,9 +19,9 @@ export interface GameRoomPlayer {
   room_id: string;
   player_name: string;
   is_host: boolean;
-  is_ready: boolean; // ✅ Ajouté
-  score: number; // ✅ Ajouté
-  finished_at: string | null; // ✅ Ajouté
+  is_ready: boolean;
+  score: number;
+  finished_at: string | null;
   joined_at: string;
 }
 
@@ -28,27 +29,78 @@ export interface GameRoomAnswer {
   id: string;
   room_id: string;
   player_id: string;
+  round_id: string;
   categorie_id: number;
   word: string;
   is_valid: boolean;
   points: number;
+  needs_manual_validation: boolean;
+  manual_validation_result: boolean | null;
   submitted_at: string;
+}
+
+export interface GameRound {
+  id: string;
+  room_id: string;
+  round_number: number;
+  letter: string;
+  status: 'playing' | 'finished';
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface GameRoundScore {
+  id: string;
+  round_id: string;
+  player_id: string;
+  round_score: number;
+  valid_words_count: number;
+  stopped_early: boolean;
+  penalty_applied: boolean;
+  finished_at: string | null;
+}
+
+export interface EndGameRequest {
+  id: string;
+  room_id: string;
+  round_id: string;
+  requester_player_id: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  created_at: string;
+  responded_at: string | null;
+}
+
+export interface WordValidationVote {
+  id: string;
+  room_id: string;
+  round_id: string;
+  answer_id: string;
+  word: string;
+  categorie_id: number;
+  player_id: string;
+  vote: boolean | null;
+  created_at: string;
+  voted_at: string | null;
 }
 
 export interface RoomSubscriptionCallbacks {
   onPlayerJoined: (player: GameRoomPlayer) => void;
-  onPlayerLeft: (playerId: string) => void; // ✅ Ajouté
+  onPlayerLeft: (playerId: string) => void;
   onGameStarted: () => void;
-  onPlayerFinished: (player: GameRoomPlayer) => void; // ✅ Ajouté
-  onAnswerSubmitted?: (answer: GameRoomAnswer) => void; // ✅ Ajouté (optionnel)
+  onPlayerFinished: (player: GameRoomPlayer) => void;
+  onAnswerSubmitted?: (answer: GameRoomAnswer) => void;
+  onEndGameRequestReceived?: (request: EndGameRequest) => void;
+  onEndGameRequestResponded?: (request: EndGameRequest) => void;
+  onWordValidationVoted?: (vote: WordValidationVote) => void;
+  onRoundFinished?: (round: GameRound) => void;
 }
 
 class OnlineService {
   private currentRoomId: string | null = null;
-  private currentPlayerId: string | null = null; // ✅ Ajouté pour tracking
+  private currentPlayerId: string | null = null;
+  private currentRoundId: string | null = null;
   private subscription: any = null;
 
-  // Generate a random 4-character room code
   private generateRoomCode(): string {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let code = '';
@@ -58,7 +110,6 @@ class OnlineService {
     return code;
   }
 
-  // Create a new game room
   async createRoom(playerName: string, letter: string): Promise<{ room: GameRoom; player: GameRoomPlayer }> {
     const roomCode = this.generateRoomCode();
 
@@ -66,9 +117,10 @@ class OnlineService {
       .from('game_rooms')
       .insert({
         room_code: roomCode,
-        host_player_name: playerName, // ✅ Corrigé
+        host_player_name: playerName,
         letter: letter,
-        status: 'waiting', // ✅ Corrigé
+        status: 'waiting',
+        current_round_number: 1,
       })
       .select()
       .single();
@@ -92,11 +144,10 @@ class OnlineService {
     }
 
     this.currentRoomId = room.id;
-    this.currentPlayerId = player.id; // ✅ Ajouté
+    this.currentPlayerId = player.id;
     return { room, player };
   }
 
-  // Join an existing room
   async joinRoom(roomCode: string, playerName: string): Promise<{ room: GameRoom; player: GameRoomPlayer }> {
     const { data: room, error: roomError } = await supabase
       .from('game_rooms')
@@ -114,7 +165,7 @@ class OnlineService {
       .select()
       .eq('room_id', room.id);
 
-    if (existingPlayers && existingPlayers.length >= room.max_players) { // ✅ Utilise max_players
+    if (existingPlayers && existingPlayers.length >= room.max_players) {
       throw new Error('La salle est pleine');
     }
 
@@ -133,11 +184,10 @@ class OnlineService {
     }
 
     this.currentRoomId = room.id;
-    this.currentPlayerId = player.id; // ✅ Ajouté
+    this.currentPlayerId = player.id;
     return { room, player };
   }
 
-  // Get all players in a room
   async getPlayers(roomId: string): Promise<GameRoomPlayer[]> {
     const { data, error } = await supabase
       .from('game_room_players')
@@ -152,7 +202,6 @@ class OnlineService {
     return data || [];
   }
 
-  // Get room details
   async getRoom(roomId: string): Promise<GameRoom | null> {
     const { data, error } = await supabase
       .from('game_rooms')
@@ -167,24 +216,138 @@ class OnlineService {
     return data;
   }
 
-  // ✅ NOUVEAU : Soumettre une réponse
+  // ===== GESTION DES MANCHES =====
+
+  async createRound(roomId: string, roundNumber: number, letter: string): Promise<GameRound> {
+    const { data, error } = await supabase
+      .from('game_rounds')
+      .insert({
+        room_id: roomId,
+        round_number: roundNumber,
+        letter: letter,
+        status: 'playing',
+      })
+      .select()
+      .single();
+
+    if (error || !data) {
+      throw new Error('Impossible de créer la manche');
+    }
+
+    this.currentRoundId = data.id;
+    return data;
+  }
+
+  async getCurrentRound(roomId: string): Promise<GameRound | null> {
+    const { data, error } = await supabase
+      .from('game_rounds')
+      .select()
+      .eq('room_id', roomId)
+      .eq('status', 'playing')
+      .order('round_number', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error) {
+      return null;
+    }
+
+    if (data) {
+      this.currentRoundId = data.id;
+    }
+
+    return data;
+  }
+
+  async finishRound(roundId: string): Promise<void> {
+    const { error } = await supabase
+      .from('game_rounds')
+      .update({
+        status: 'finished',
+        finished_at: new Date().toISOString(),
+      })
+      .eq('id', roundId);
+
+    if (error) {
+      throw new Error('Impossible de terminer la manche');
+    }
+  }
+
+  async submitRoundScore(
+    roundId: string,
+    playerId: string,
+    roundScore: number,
+    validWordsCount: number,
+    stoppedEarly: boolean,
+    penaltyApplied: boolean
+  ): Promise<void> {
+    const { error } = await supabase
+      .from('game_round_scores')
+      .insert({
+        round_id: roundId,
+        player_id: playerId,
+        round_score: roundScore,
+        valid_words_count: validWordsCount,
+        stopped_early: stoppedEarly,
+        penalty_applied: penaltyApplied,
+        finished_at: new Date().toISOString(),
+      });
+
+    if (error) {
+      throw new Error('Impossible de soumettre le score de manche');
+    }
+  }
+
+  async getRoundScores(roundId: string): Promise<GameRoundScore[]> {
+    const { data, error } = await supabase
+      .from('game_round_scores')
+      .select()
+      .eq('round_id', roundId);
+
+    if (error) {
+      throw new Error('Impossible de charger les scores de manche');
+    }
+
+    return data || [];
+  }
+
+  async getAllRoundsForRoom(roomId: string): Promise<GameRound[]> {
+    const { data, error } = await supabase
+      .from('game_rounds')
+      .select()
+      .eq('room_id', roomId)
+      .order('round_number', { ascending: true });
+
+    if (error) {
+      throw new Error('Impossible de charger les manches');
+    }
+
+    return data || [];
+  }
+
+  // ===== GESTION DES RÉPONSES =====
+
   async submitAnswer(
     roomId: string,
     playerId: string,
+    roundId: string,
     categorieId: number,
     word: string,
     isValid: boolean,
-    points: number
+    points: number,
+    needsManualValidation: boolean = false
   ): Promise<GameRoomAnswer> {
     const { data, error } = await supabase
       .from('game_room_answers')
       .insert({
         room_id: roomId,
         player_id: playerId,
+        round_id: roundId,
         categorie_id: categorieId,
         word: word,
         is_valid: isValid,
         points: points,
+        needs_manual_validation: needsManualValidation,
       })
       .select()
       .single();
@@ -196,12 +359,26 @@ class OnlineService {
     return data;
   }
 
-  // ✅ NOUVEAU : Récupérer les réponses d'un joueur
-  async getPlayerAnswers(playerId: string): Promise<GameRoomAnswer[]> {
+  async getRoundAnswers(roundId: string): Promise<GameRoomAnswer[]> {
+    const { data, error } = await supabase
+      .from('game_room_answers')
+      .select()
+      .eq('round_id', roundId)
+      .order('submitted_at', { ascending: true });
+
+    if (error) {
+      throw new Error('Impossible de charger les réponses');
+    }
+
+    return data || [];
+  }
+
+  async getPlayerRoundAnswers(playerId: string, roundId: string): Promise<GameRoomAnswer[]> {
     const { data, error } = await supabase
       .from('game_room_answers')
       .select()
       .eq('player_id', playerId)
+      .eq('round_id', roundId)
       .order('submitted_at', { ascending: true });
 
     if (error) {
@@ -211,135 +388,188 @@ class OnlineService {
     return data || [];
   }
 
-  // ✅ NOUVEAU : Récupérer toutes les réponses d'une salle
-  async getRoomAnswers(roomId: string): Promise<GameRoomAnswer[]> {
+  // ===== DEMANDES DE FIN DE PARTIE =====
+
+  async requestEndGame(roomId: string, roundId: string, requesterId: string): Promise<EndGameRequest> {
     const { data, error } = await supabase
-      .from('game_room_answers')
+      .from('end_game_requests')
+      .insert({
+        room_id: roomId,
+        round_id: roundId,
+        requester_player_id: requesterId,
+        status: 'pending',
+      })
+      .select()
+      .single();
+
+    if (error || !data) {
+      throw new Error('Impossible d\'envoyer la demande');
+    }
+
+    return data;
+  }
+
+  async respondToEndGameRequest(requestId: string, accept: boolean): Promise<void> {
+    const { error } = await supabase
+      .from('end_game_requests')
+      .update({
+        status: accept ? 'accepted' : 'rejected',
+        responded_at: new Date().toISOString(),
+      })
+      .eq('id', requestId);
+
+    if (error) {
+      throw new Error('Impossible de répondre à la demande');
+    }
+  }
+
+  async getPendingEndGameRequest(roomId: string, roundId: string): Promise<EndGameRequest | null> {
+    const { data, error } = await supabase
+      .from('end_game_requests')
       .select()
       .eq('room_id', roomId)
-      .order('submitted_at', { ascending: true });
+      .eq('round_id', roundId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     if (error) {
-      throw new Error('Impossible de charger les réponses');
+      return null;
+    }
+
+    return data;
+  }
+
+  // ===== VALIDATION MANUELLE DE MOTS =====
+
+  async createWordValidationVote(
+    roomId: string,
+    roundId: string,
+    answerId: string,
+    word: string,
+    categorieId: number,
+    players: GameRoomPlayer[]
+  ): Promise<void> {
+    const votes = players.map(player => ({
+      room_id: roomId,
+      round_id: roundId,
+      answer_id: answerId,
+      word: word,
+      categorie_id: categorieId,
+      player_id: player.id,
+      vote: null,
+    }));
+
+    const { error } = await supabase
+      .from('word_validation_votes')
+      .insert(votes);
+
+    if (error) {
+      throw new Error('Impossible de créer les votes');
+    }
+  }
+
+  async voteForWordValidation(voteId: string, playerId: string, isValid: boolean): Promise<void> {
+    const { error } = await supabase
+      .from('word_validation_votes')
+      .update({
+        vote: isValid,
+        voted_at: new Date().toISOString(),
+      })
+      .eq('id', voteId)
+      .eq('player_id', playerId);
+
+    if (error) {
+      throw new Error('Impossible d\'enregistrer le vote');
+    }
+  }
+
+  async getWordValidationVotes(answerId: string): Promise<WordValidationVote[]> {
+    const { data, error } = await supabase
+      .from('word_validation_votes')
+      .select()
+      .eq('answer_id', answerId);
+
+    if (error) {
+      throw new Error('Impossible de charger les votes');
     }
 
     return data || [];
   }
 
-  // ✅ NOUVEAU : Marquer un joueur comme ayant terminé
-  async finishPlayer(playerId: string, score: number): Promise<void> {
+  async updateAnswerWithManualValidation(answerId: string, isValid: boolean, points: number): Promise<void> {
     const { error } = await supabase
-      .from('game_room_players')
+      .from('game_room_answers')
       .update({
-        score: score,
-        finished_at: new Date().toISOString(),
+        manual_validation_result: isValid,
+        is_valid: isValid,
+        points: points,
       })
-      .eq('id', playerId);
+      .eq('id', answerId);
 
     if (error) {
-      throw new Error('Impossible de mettre à jour le score');
+      throw new Error('Impossible de mettre à jour la réponse');
     }
   }
 
-  // Subscribe to room updates
+  // ===== SOUSCRIPTIONS =====
+
   subscribeToRoom(roomId: string, callbacks: RoomSubscriptionCallbacks) {
-  console.log('🔔 Souscription à la room:', roomId);
-  
-  // Nettoyer l'ancienne souscription si elle existe
-  if (this.subscription) {
-    supabase.removeChannel(this.subscription);
-  }
-
-  this.subscription = supabase
-    .channel(`room:${roomId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'game_room_players',
-        filter: `room_id=eq.${roomId}`,
-      },
-      (payload) => {
-        console.log('✅ Nouveau joueur détecté:', payload.new);
-        callbacks.onPlayerJoined(payload.new as GameRoomPlayer);
-      }
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: 'DELETE',
-        schema: 'public',
-        table: 'game_room_players',
-        filter: `room_id=eq.${roomId}`,
-      },
-      (payload) => {
-        console.log('❌ Joueur parti:', payload.old);
-        callbacks.onPlayerLeft((payload.old as GameRoomPlayer).id);
-      }
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'game_rooms',
-        filter: `id=eq.${roomId}`,
-      },
-      (payload) => {
-        console.log('🎮 Mise à jour de la room:', payload.new);
-        const room = payload.new as GameRoom;
-        if (room.status === 'playing') {
-          callbacks.onGameStarted();
-        }
-      }
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'game_room_players',
-        filter: `room_id=eq.${roomId}`,
-      },
-      (payload) => {
-        const player = payload.new as GameRoomPlayer;
-        if (player.finished_at) {
-          console.log('🏁 Joueur a terminé:', player);
-          callbacks.onPlayerFinished(player);
-        }
-      }
-    );
-
-  // ✅ Optionnel : écouter les réponses en temps réel
-  if (callbacks.onAnswerSubmitted) {
-    this.subscription.on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'game_room_answers',
-        filter: `room_id=eq.${roomId}`,
-      },
-      (payload) => {
-        console.log('📝 Nouvelle réponse:', payload.new);
-        callbacks.onAnswerSubmitted!(payload.new as GameRoomAnswer);
-      }
-    );
-  }
-
-  // ✅ IMPORTANT : Subscribe APRÈS avoir ajouté tous les listeners
-  this.subscription.subscribe((status: string) => {
-    console.log('📡 Statut de souscription:', status);
-    if (status === 'SUBSCRIBED') {
-      console.log('✅ Souscription active pour la room:', roomId);
-    } else if (status === 'CHANNEL_ERROR') {
-      console.error('❌ Erreur de souscription pour la room:', roomId);
+    console.log('🔔 Souscription à la room:', roomId);
+    
+    if (this.subscription) {
+      supabase.removeChannel(this.subscription);
     }
-  });
-}
 
-  // Unsubscribe from room updates
+    this.subscription = supabase
+      .channel(`room:${roomId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'game_room_players', filter: `room_id=eq.${roomId}` },
+        (payload) => callbacks.onPlayerJoined(payload.new as GameRoomPlayer))
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'game_room_players', filter: `room_id=eq.${roomId}` },
+        (payload) => callbacks.onPlayerLeft((payload.old as GameRoomPlayer).id))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_rooms', filter: `id=eq.${roomId}` },
+        (payload) => {
+          const room = payload.new as GameRoom;
+          if (room.status === 'playing') callbacks.onGameStarted();
+        })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_room_players', filter: `room_id=eq.${roomId}` },
+        (payload) => {
+          const player = payload.new as GameRoomPlayer;
+          if (player.finished_at) callbacks.onPlayerFinished(player);
+        });
+
+    if (callbacks.onAnswerSubmitted) {
+      this.subscription.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'game_room_answers', filter: `room_id=eq.${roomId}` },
+        (payload) => callbacks.onAnswerSubmitted!(payload.new as GameRoomAnswer));
+    }
+
+    if (callbacks.onEndGameRequestReceived) {
+      this.subscription.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'end_game_requests', filter: `room_id=eq.${roomId}` },
+        (payload) => callbacks.onEndGameRequestReceived!(payload.new as EndGameRequest));
+    }
+
+    if (callbacks.onEndGameRequestResponded) {
+      this.subscription.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'end_game_requests', filter: `room_id=eq.${roomId}` },
+        (payload) => callbacks.onEndGameRequestResponded!(payload.new as EndGameRequest));
+    }
+
+    if (callbacks.onWordValidationVoted) {
+      this.subscription.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'word_validation_votes', filter: `room_id=eq.${roomId}` },
+        (payload) => callbacks.onWordValidationVoted!(payload.new as WordValidationVote));
+    }
+
+    if (callbacks.onRoundFinished) {
+      this.subscription.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_rounds', filter: `room_id=eq.${roomId}` },
+        (payload) => {
+          const round = payload.new as GameRound;
+          if (round.status === 'finished') callbacks.onRoundFinished!(round);
+        });
+    }
+
+    this.subscription.subscribe();
+  }
+
   unsubscribeFromRoom() {
     if (this.subscription) {
       supabase.removeChannel(this.subscription);
@@ -347,13 +577,12 @@ class OnlineService {
     }
   }
 
-  // Start the game
   async startGame(roomId: string) {
     const { error } = await supabase
       .from('game_rooms')
       .update({ 
-        status: 'playing', // ✅ Corrigé
-        started_at: new Date().toISOString(), // ✅ Ajouté
+        status: 'playing',
+        started_at: new Date().toISOString(),
       })
       .eq('id', roomId);
 
@@ -362,7 +591,6 @@ class OnlineService {
     }
   }
 
-  // ✅ NOUVEAU : Terminer la partie
   async finishGame(roomId: string) {
     const { error } = await supabase
       .from('game_rooms')
@@ -377,7 +605,6 @@ class OnlineService {
     }
   }
 
-  // Leave room (amélioration avec gestion de l'hôte)
   async leaveRoom(roomId: string, playerId: string) {
     const { data: player } = await supabase
       .from('game_room_players')
@@ -385,59 +612,33 @@ class OnlineService {
       .eq('id', playerId)
       .single();
 
-    // Si l'hôte quitte, supprimer toute la salle
     if (player?.is_host) {
-      const { error: roomError } = await supabase
-        .from('game_rooms')
-        .delete()
-        .eq('id', roomId);
-
-      if (roomError) {
-        console.error('Error deleting room:', roomError);
-      }
+      await supabase.from('game_rooms').delete().eq('id', roomId);
     } else {
-      // Sinon, juste retirer le joueur
-      const { error } = await supabase
-        .from('game_room_players')
-        .delete()
-        .eq('id', playerId);
-
-      if (error) {
-        console.error('Error leaving room:', error);
-      }
+      await supabase.from('game_room_players').delete().eq('id', playerId);
     }
   }
 
-  // ✅ NOUVEAU : Nettoyage des salles abandonnées (à appeler périodiquement)
-  async cleanupOldRooms(maxAgeMinutes: number = 30) {
-    const cutoffTime = new Date();
-    cutoffTime.setMinutes(cutoffTime.getMinutes() - maxAgeMinutes);
-
-    const { error } = await supabase
-      .from('game_rooms')
-      .delete()
-      .eq('status', 'waiting')
-      .lt('created_at', cutoffTime.toISOString());
-
-    if (error) {
-      console.error('Error cleaning up old rooms:', error);
-    }
-  }
-
-  // Clear current room
   clearCurrentRoom() {
     this.currentRoomId = null;
-    this.currentPlayerId = null; // ✅ Ajouté
+    this.currentPlayerId = null;
+    this.currentRoundId = null;
   }
 
-  // Get current room ID
   getCurrentRoomId(): string | null {
     return this.currentRoomId;
   }
 
-  // ✅ NOUVEAU : Get current player ID
   getCurrentPlayerId(): string | null {
     return this.currentPlayerId;
+  }
+
+  getCurrentRoundId(): string | null {
+    return this.currentRoundId;
+  }
+
+  setCurrentRoundId(roundId: string) {
+    this.currentRoundId = roundId;
   }
 }
 

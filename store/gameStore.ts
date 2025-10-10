@@ -14,6 +14,17 @@ export type GameResult = {
   word: string;
   isValid: boolean;
   points: number;
+  needsManualValidation?: boolean;
+  manualValidationResult?: boolean | null;
+};
+
+export type RoundHistory = {
+  roundNumber: number;
+  letter: string;
+  myScore: number;
+  opponentScore: number;
+  myValidWords: number;
+  opponentValidWords: number;
 };
 
 type GameState = {
@@ -32,6 +43,15 @@ type GameState = {
   opponentResults: GameResult[] | null;
   opponentScore: number;
 
+  // Round system state
+  currentRound: number;
+  totalScore: number; // Score cumulé sur toutes les manches
+  opponentTotalScore: number;
+  roundHistory: RoundHistory[];
+  stoppedEarly: boolean; // Si le joueur a validé avant la fin
+  endGameRequested: boolean; // Si une demande de fin a été envoyée
+  endGameRequestReceived: boolean; // Si une demande de fin a été reçue
+
   setLetter: (letter: string) => void;
   setCategories: (categories: Categorie[]) => void;
   setAnswer: (categorieId: number, word: string) => void;
@@ -39,11 +59,19 @@ type GameState = {
   setScore: (score: number) => void;
   startGame: (letter: string, categories: Categorie[]) => void;
   startMultiplayerGame: (letter: string, categories: Categorie[], isHost: boolean, opponentName: string) => void;
-  setMultiplayerResults: (myResults: GameResult[], myScore: number) => void;
+  setMultiplayerResults: (myResults: GameResult[], myScore: number, stoppedEarly?: boolean) => void;
   setOpponentResults: (results: GameResult[], score: number) => void;
   endGame: () => void;
   resetGame: () => void;
   setTimeRemaining: (time: number) => void;
+  
+  // Round system actions
+  startNewRound: (letter: string) => void;
+  addRoundToHistory: (round: RoundHistory) => void;
+  setStoppedEarly: (stopped: boolean) => void;
+  setEndGameRequested: (requested: boolean) => void;
+  setEndGameRequestReceived: (received: boolean) => void;
+  updateTotalScores: (myScore: number, opponentScore: number) => void;
 };
 
 export const useGameStore = create<GameState>((set) => ({
@@ -61,6 +89,15 @@ export const useGameStore = create<GameState>((set) => ({
   opponentName: null,
   opponentResults: null,
   opponentScore: 0,
+
+  // Round system state
+  currentRound: 1,
+  totalScore: 0,
+  opponentTotalScore: 0,
+  roundHistory: [],
+  stoppedEarly: false,
+  endGameRequested: false,
+  endGameRequestReceived: false,
 
   setLetter: (letter) => set({ currentLetter: letter }),
 
@@ -106,6 +143,13 @@ export const useGameStore = create<GameState>((set) => ({
       opponentName: null,
       opponentResults: null,
       opponentScore: 0,
+      currentRound: 1,
+      totalScore: 0,
+      opponentTotalScore: 0,
+      roundHistory: [],
+      stoppedEarly: false,
+      endGameRequested: false,
+      endGameRequestReceived: false,
     }),
 
   startMultiplayerGame: (letter, categories, isHost, opponentName) =>
@@ -122,12 +166,20 @@ export const useGameStore = create<GameState>((set) => ({
       opponentName,
       opponentResults: null,
       opponentScore: 0,
+      currentRound: 1,
+      totalScore: 0,
+      opponentTotalScore: 0,
+      roundHistory: [],
+      stoppedEarly: false,
+      endGameRequested: false,
+      endGameRequestReceived: false,
     }),
 
-  setMultiplayerResults: (myResults, myScore) =>
+  setMultiplayerResults: (myResults, myScore, stoppedEarly = false) =>
     set({
       results: myResults,
       score: myScore,
+      stoppedEarly,
     }),
 
   setOpponentResults: (results, score) =>
@@ -152,7 +204,48 @@ export const useGameStore = create<GameState>((set) => ({
       opponentName: null,
       opponentResults: null,
       opponentScore: 0,
+      currentRound: 1,
+      totalScore: 0,
+      opponentTotalScore: 0,
+      roundHistory: [],
+      stoppedEarly: false,
+      endGameRequested: false,
+      endGameRequestReceived: false,
     }),
 
   setTimeRemaining: (time) => set({ timeRemaining: time }),
+
+  // Round system actions
+  startNewRound: (letter) =>
+    set((state) => ({
+      currentLetter: letter,
+      currentRound: state.currentRound + 1,
+      answers: [],
+      results: null,
+      score: 0,
+      isPlaying: true,
+      timeRemaining: 120,
+      stoppedEarly: false,
+      endGameRequested: false,
+      endGameRequestReceived: false,
+      opponentResults: null,
+      opponentScore: 0,
+    })),
+
+  addRoundToHistory: (round) =>
+    set((state) => ({
+      roundHistory: [...state.roundHistory, round],
+    })),
+
+  setStoppedEarly: (stopped) => set({ stoppedEarly: stopped }),
+
+  setEndGameRequested: (requested) => set({ endGameRequested: requested }),
+
+  setEndGameRequestReceived: (received) => set({ endGameRequestReceived: received }),
+
+  updateTotalScores: (myScore, opponentScore) =>
+    set((state) => ({
+      totalScore: state.totalScore + myScore,
+      opponentTotalScore: state.opponentTotalScore + opponentScore,
+    })),
 }));
