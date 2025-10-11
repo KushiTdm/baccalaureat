@@ -4,21 +4,12 @@ import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { useGameStore } from '../store/gameStore';
 import Button from '../components/Button';
-import { onlineService, GameRoomPlayer, GameRoomAnswer, GameRoundScore, WordValidationVote } from '../services/online';
-import { CheckCircle, XCircle, Trophy, Crown, HelpCircle, Play, StopCircle } from 'lucide-react-native';
+import { onlineService, GameRoomPlayer, GameRoomAnswer, GameRoundScore } from '../services/online';
+import { CheckCircle, XCircle, Trophy, Crown, AlertCircle, Play, StopCircle } from 'lucide-react-native';
 import { GameResult, RoundHistory } from '../store/gameStore';
 import { getCategories } from '../services/api';
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-
-type WordNeedingValidation = {
-  answerId: string;
-  word: string;
-  categorieId: number;
-  categoryName: string;
-  playerId: string;
-  playerName: string;
-};
 
 export default function OnlineResultsScreen() {
   const router = useRouter();
@@ -34,7 +25,6 @@ export default function OnlineResultsScreen() {
     addRoundToHistory,
     updateTotalScores,
     startNewRound,
-    stoppedEarly,
     currentLetter,
     startMultiplayerGame,
     opponentName,
@@ -45,10 +35,10 @@ export default function OnlineResultsScreen() {
   const [allAnswers, setAllAnswers] = useState<GameRoomAnswer[]>([]);
   const [roundScores, setRoundScores] = useState<GameRoundScore[]>([]);
   const [loading, setLoading] = useState(true);
-  const [wordsNeedingValidation, setWordsNeedingValidation] = useState<WordNeedingValidation[]>([]);
   const [showValidationModal, setShowValidationModal] = useState(false);
-  const [currentValidationIndex, setCurrentValidationIndex] = useState(0);
-  const [validationVotes, setValidationVotes] = useState<Record<string, boolean>>({});
+  const [contestedWord, setContestedWord] = useState<GameRoomAnswer | null>(null);
+  const [myVote, setMyVote] = useState<boolean | null>(null);
+  const [opponentVote, setOpponentVote] = useState<boolean | null>(null);
   const [showFinalResults, setShowFinalResults] = useState(false);
 
   const roomId = onlineService.getCurrentRoomId();
@@ -77,46 +67,6 @@ export default function OnlineResultsScreen() {
       setAllPlayers(players);
       setAllAnswers(answers);
       setRoundScores(scores);
-
-      // Identifier les mots nécessitant une validation manuelle
-      const needsValidation: WordNeedingValidation[] = [];
-      for (const answer of answers) {
-        if (answer.needs_manual_validation && answer.manual_validation_result === null) {
-          const player = players.find(p => p.id === answer.player_id);
-          const category = categories.find(c => c.id === answer.categorie_id);
-          if (player && category) {
-            needsValidation.push({
-              answerId: answer.id,
-              word: answer.word,
-              categorieId: answer.categorie_id,
-              categoryName: category.nom,
-              playerId: answer.player_id,
-              playerName: player.player_name,
-            });
-          }
-        }
-      }
-
-      setWordsNeedingValidation(needsValidation);
-
-      // Si des mots nécessitent validation, afficher le modal
-      if (needsValidation.length > 0) {
-        // Créer les votes si pas déjà créés
-        for (const word of needsValidation) {
-          const existingVotes = await onlineService.getWordValidationVotes(word.answerId);
-          if (existingVotes.length === 0) {
-            await onlineService.createWordValidationVote(
-              roomId,
-              roundId,
-              word.answerId,
-              word.word,
-              word.categorieId,
-              players
-            );
-          }
-        }
-        setShowValidationModal(true);
-      }
     } catch (error) {
       console.error('Error loading results:', error);
     } finally {
@@ -133,85 +83,98 @@ export default function OnlineResultsScreen() {
   const myRoundScore = roundScores.find(s => s.player_id === currentPlayerId);
   const opponentRoundScore = roundScores.find(s => s.player_id !== currentPlayerId);
 
-  async function handleValidateWord(isValid: boolean) {
-    if (currentValidationIndex >= wordsNeedingValidation.length) return;
+  // Calculer les scores réels depuis les réponses
+  const myAnswers = allAnswers.filter(a => a.player_id === currentPlayerId);
+  const opponentAnswers = allAnswers.filter(a => a.player_id !== currentPlayerId);
+  
+  const myCalculatedScore = myAnswers.reduce((sum, a) => sum + a.points, 0);
+  const opponentCalculatedScore = opponentAnswers.reduce((sum, a) => sum + a.points, 0);
 
-    const currentWord = wordsNeedingValidation[currentValidationIndex];
+  // Appliquer les pénalités
+  const myFinalScore = myRoundScore?.penalty_applied 
+    ? Math.max(0, myCalculatedScore - 3) 
+    : myCalculatedScore;
+  const opponentFinalScore = opponentRoundScore?.penalty_applied 
+    ? Math.max(0, opponentCalculatedScore - 3) 
+    : opponentCalculatedScore;
+
+  async function handleContestWord(answer: GameRoomAnswer) {
+    setContestedWord(answer);
+    setMyVote(null);
+    setOpponentVote(null);
+
+    // Vérifier si des votes existent déjà
+    const existingVotes = await onlineService.getWordValidationVotes(answer.id);
     
-    // Enregistrer le vote local
-    setValidationVotes(prev => ({
-      ...prev,
-      [currentWord.answerId]: isValid,
-    }));
-
-    try {
-      // Récupérer les votes existants
-      const votes = await onlineService.getWordValidationVotes(currentWord.answerId);
-      const myVote = votes.find(v => v.player_id === currentPlayerId);
+    if (existingVotes.length === 0) {
+      // Créer les votes
+      await onlineService.createWordValidationVote(
+        roomId,
+        roundId,
+        answer.id,
+        answer.word,
+        answer.categorie_id,
+        allPlayers
+      );
+    } else {
+      // Charger les votes existants
+      const myExistingVote = existingVotes.find(v => v.player_id === currentPlayerId);
+      const opponentExistingVote = existingVotes.find(v => v.player_id !== currentPlayerId);
       
-      if (myVote) {
-        await onlineService.voteForWordValidation(myVote.id, currentPlayerId, isValid);
-      }
-
-      // Vérifier si tous les joueurs ont voté
-      const updatedVotes = await onlineService.getWordValidationVotes(currentWord.answerId);
-      const allVoted = updatedVotes.every(v => v.vote !== null);
-
-      if (allVoted) {
-        // Calculer le résultat (unanimité requise pour valider)
-        const allValid = updatedVotes.every(v => v.vote === true);
-        const points = allValid ? 2 : 0;
-
-        // Mettre à jour la réponse
-        await onlineService.updateAnswerWithManualValidation(currentWord.answerId, allValid, points);
-
-        // Passer au mot suivant ou fermer le modal
-        if (currentValidationIndex < wordsNeedingValidation.length - 1) {
-          setCurrentValidationIndex(currentValidationIndex + 1);
-        } else {
-          setShowValidationModal(false);
-          // Recharger les résultats avec les scores mis à jour
-          await recalculateScores();
-        }
-      } else {
-        // Attendre les autres votes
-        Alert.alert('Vote enregistré', 'En attente du vote de votre adversaire...');
-      }
-    } catch (error) {
-      Alert.alert('Erreur', 'Impossible d\'enregistrer le vote');
+      if (myExistingVote) setMyVote(myExistingVote.vote);
+      if (opponentExistingVote) setOpponentVote(opponentExistingVote.vote);
     }
+
+    setShowValidationModal(true);
   }
 
-  async function recalculateScores() {
-    if (!roomId || !roundId) return;
+  async function handleVote(isValid: boolean) {
+    if (!contestedWord) return;
+
+    setMyVote(isValid);
 
     try {
-      // Recharger les réponses avec les validations manuelles
-      const updatedAnswers = await onlineService.getRoundAnswers(roundId);
-      setAllAnswers(updatedAnswers);
+      const votes = await onlineService.getWordValidationVotes(contestedWord.id);
+      const myVoteRecord = votes.find(v => v.player_id === currentPlayerId);
+      
+      if (myVoteRecord) {
+        await onlineService.voteForWordValidation(myVoteRecord.id, currentPlayerId, isValid);
+      }
 
-      // Recalculer les scores
-      const myUpdatedAnswers = updatedAnswers.filter(a => a.player_id === currentPlayerId);
-      const opponentUpdatedAnswers = updatedAnswers.filter(a => a.player_id !== currentPlayerId);
+      // Polling pour attendre le vote de l'adversaire
+      Alert.alert('Vote enregistré', 'En attente du vote de votre adversaire...');
 
-      const myNewScore = myUpdatedAnswers.reduce((sum, a) => sum + a.points, 0);
-      const opponentNewScore = opponentUpdatedAnswers.reduce((sum, a) => sum + a.points, 0);
+      const checkVotes = setInterval(async () => {
+        const updatedVotes = await onlineService.getWordValidationVotes(contestedWord.id);
+        const allVoted = updatedVotes.every(v => v.vote !== null);
 
-      // Appliquer pénalités si nécessaire
-      const myFinalScore = myRoundScore?.penalty_applied 
-        ? Math.max(0, myNewScore - 3) 
-        : myNewScore;
-      const opponentFinalScore = opponentRoundScore?.penalty_applied 
-        ? Math.max(0, opponentNewScore - 3) 
-        : opponentNewScore;
+        if (allVoted) {
+          clearInterval(checkVotes);
 
-      // Mettre à jour les scores dans le store
-      updateTotalScores(myFinalScore, opponentFinalScore);
+          // Calculer le résultat (unanimité requise)
+          const allValid = updatedVotes.every(v => v.vote === true);
+          const points = allValid ? 2 : 0;
 
-      // Recharger les résultats
-      await loadResults();
+          // Mettre à jour la réponse
+          await onlineService.updateAnswerWithManualValidation(contestedWord.id, allValid, points);
+
+          setShowValidationModal(false);
+          
+          Alert.alert(
+            'Validation terminée',
+            allValid ? 'Le mot a été validé' : 'Le mot a été refusé',
+            [{ text: 'OK', onPress: () => loadResults() }]
+          );
+        }
+      }, 1000);
+
+      // Timeout après 60 secondes
+      setTimeout(() => {
+        clearInterval(checkVotes);
+      }, 60000);
+
     } catch (error) {
-      console.error('Error recalculating scores:', error);
+      Alert.alert('Erreur', 'Impossible d\'enregistrer le vote');
     }
   }
 
@@ -219,16 +182,17 @@ export default function OnlineResultsScreen() {
     if (!roomId || !opponent) return;
 
     try {
-      // Ajouter la manche à l'historique
+      // Ajouter la manche à l'historique avec les scores corrigés
       const roundData: RoundHistory = {
         roundNumber: currentRound,
         letter: currentLetter || '',
-        myScore: myRoundScore?.round_score || 0,
-        opponentScore: opponentRoundScore?.round_score || 0,
-        myValidWords: myRoundScore?.valid_words_count || 0,
-        opponentValidWords: opponentRoundScore?.valid_words_count || 0,
+        myScore: myFinalScore,
+        opponentScore: opponentFinalScore,
+        myValidWords: myAnswers.filter(a => a.is_valid).length,
+        opponentValidWords: opponentAnswers.filter(a => a.is_valid).length,
       };
       addRoundToHistory(roundData);
+      updateTotalScores(myFinalScore, opponentFinalScore);
 
       // Nouvelle lettre aléatoire
       const newLetter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
@@ -264,13 +228,13 @@ export default function OnlineResultsScreen() {
             const roundData: RoundHistory = {
               roundNumber: currentRound,
               letter: currentLetter || '',
-              myScore: myRoundScore?.round_score || 0,
-              opponentScore: opponentRoundScore?.round_score || 0,
-              myValidWords: myRoundScore?.valid_words_count || 0,
-              opponentValidWords: opponentRoundScore?.valid_words_count || 0,
+              myScore: myFinalScore,
+              opponentScore: opponentFinalScore,
+              myValidWords: myAnswers.filter(a => a.is_valid).length,
+              opponentValidWords: opponentAnswers.filter(a => a.is_valid).length,
             };
             addRoundToHistory(roundData);
-            updateTotalScores(myRoundScore?.round_score || 0, opponentRoundScore?.round_score || 0);
+            updateTotalScores(myFinalScore, opponentFinalScore);
 
             // Terminer la partie
             if (roomId) {
@@ -290,20 +254,17 @@ export default function OnlineResultsScreen() {
     router.replace('/');
   }
 
-  const myValidAnswers = results.filter((r) => r.isValid).length;
-  const myTotalScore = totalScore + (myRoundScore?.round_score || 0);
-  const opponentTotal = opponentTotalScore + (opponentRoundScore?.round_score || 0);
-
-  // Modal de validation manuelle
-  const currentWordToValidate = wordsNeedingValidation[currentValidationIndex];
+  const myTotalScore = totalScore + myFinalScore;
+  const opponentTotal = opponentTotalScore + opponentFinalScore;
 
   // Résultats finaux
   if (showFinalResults) {
     const isWinner = myTotalScore > opponentTotal;
     const isDraw = myTotalScore === opponentTotal;
-    const totalMyValidWords = roundHistory.reduce((sum, r) => sum + r.myValidWords, 0) + myValidAnswers;
+    const totalMyValidWords = roundHistory.reduce((sum, r) => sum + r.myValidWords, 0) + 
+                               myAnswers.filter(a => a.is_valid).length;
     const totalOpponentValidWords = roundHistory.reduce((sum, r) => sum + r.opponentValidWords, 0) + 
-                                     (opponentRoundScore?.valid_words_count || 0);
+                                     opponentAnswers.filter(a => a.is_valid).length;
 
     return (
       <View style={styles.container}>
@@ -358,8 +319,8 @@ export default function OnlineResultsScreen() {
             <View style={styles.historyCard}>
               <Text style={styles.historyRound}>Manche {currentRound} - Lettre {currentLetter}</Text>
               <View style={styles.historyScores}>
-                <Text style={styles.historyScore}>Vous: {myRoundScore?.round_score || 0} pts</Text>
-                <Text style={styles.historyScore}>{opponent?.player_name}: {opponentRoundScore?.round_score || 0} pts</Text>
+                <Text style={styles.historyScore}>Vous: {myFinalScore} pts</Text>
+                <Text style={styles.historyScore}>{opponent?.player_name}: {opponentFinalScore} pts</Text>
               </View>
             </View>
           </View>
@@ -372,7 +333,7 @@ export default function OnlineResultsScreen() {
     );
   }
 
-  // Résultats de manche
+  // Résultats de manche avec comparaison détaillée
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -386,16 +347,16 @@ export default function OnlineResultsScreen() {
           <View style={styles.scoresRow}>
             <View style={styles.scoreBlock}>
               <Text style={styles.playerLabel}>Vous</Text>
-              <Text style={styles.scoreValue}>{myRoundScore?.round_score || 0}</Text>
-              <Text style={styles.validCount}>{myValidAnswers} valides</Text>
+              <Text style={styles.scoreValue}>{myFinalScore}</Text>
+              <Text style={styles.validCount}>{myAnswers.filter(a => a.is_valid).length} valides</Text>
               {myRoundScore?.penalty_applied && (
                 <Text style={styles.penaltyText}>⚠️ Pénalité -3</Text>
               )}
             </View>
             <View style={styles.scoreBlock}>
               <Text style={styles.playerLabel}>{opponent?.player_name}</Text>
-              <Text style={styles.scoreValue}>{opponentRoundScore?.round_score || 0}</Text>
-              <Text style={styles.validCount}>{opponentRoundScore?.valid_words_count || 0} valides</Text>
+              <Text style={styles.scoreValue}>{opponentFinalScore}</Text>
+              <Text style={styles.validCount}>{opponentAnswers.filter(a => a.is_valid).length} valides</Text>
               {opponentRoundScore?.penalty_applied && (
                 <Text style={styles.penaltyText}>⚠️ Pénalité -3</Text>
               )}
@@ -417,6 +378,73 @@ export default function OnlineResultsScreen() {
           </View>
         </View>
 
+        {/* Comparaison détaillée */}
+        <View style={styles.comparisonContainer}>
+          <Text style={styles.sectionTitle}>Comparaison des réponses</Text>
+          {categories.map((category) => {
+            const myAnswer = myAnswers.find(a => a.categorie_id === category.id);
+            const oppAnswer = opponentAnswers.find(a => a.categorie_id === category.id);
+
+            return (
+              <View key={category.id} style={styles.comparisonCard}>
+                <Text style={styles.categoryName}>{category.nom}</Text>
+                <View style={styles.comparisonRow}>
+                  <View style={styles.answerBlock}>
+                    <Text style={styles.answerLabel}>Vous</Text>
+                    {myAnswer?.word ? (
+                      <View style={styles.answerContainer}>
+                        <Text style={styles.answerWord}>{myAnswer.word}</Text>
+                        {myAnswer.is_valid ? (
+                          <CheckCircle size={20} color="#4caf50" />
+                        ) : (
+                          <>
+                            <XCircle size={20} color="#f44336" />
+                            <TouchableOpacity onPress={() => handleContestWord(myAnswer)}>
+                              <AlertCircle size={20} color="#FF9800" />
+                            </TouchableOpacity>
+                          </>
+                        )}
+                        <Text style={styles.pointsText}>+{myAnswer.points}</Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.noAnswer}>-</Text>
+                    )}
+                  </View>
+
+                  <View style={styles.answerBlock}>
+                    <Text style={styles.answerLabel}>{opponent?.player_name}</Text>
+                    {oppAnswer?.word ? (
+                      <View style={styles.answerContainer}>
+                        <Text style={styles.answerWord}>{oppAnswer.word}</Text>
+                        {oppAnswer.is_valid ? (
+                          <CheckCircle size={20} color="#4caf50" />
+                        ) : (
+                          <>
+                            <XCircle size={20} color="#f44336" />
+                            <TouchableOpacity onPress={() => handleContestWord(oppAnswer)}>
+                              <AlertCircle size={20} color="#FF9800" />
+                            </TouchableOpacity>
+                          </>
+                        )}
+                        <Text style={styles.pointsText}>+{oppAnswer.points}</Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.noAnswer}>-</Text>
+                    )}
+                  </View>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+
+        <View style={styles.infoBox}>
+          <AlertCircle size={20} color="#FF9800" />
+          <Text style={styles.infoText}>
+            Cliquez sur l'icône orange pour contester un mot
+          </Text>
+        </View>
+
         <View style={styles.buttonContainer}>
           <Button 
             title="Manche suivante" 
@@ -433,49 +461,54 @@ export default function OnlineResultsScreen() {
       </ScrollView>
 
       {/* Modal de validation manuelle */}
-      <Modal
-        visible={showValidationModal}
-        transparent={true}
-        animationType="slide"
-      >
+      <Modal visible={showValidationModal} transparent={true} animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <HelpCircle size={48} color="#FF9800" />
-            <Text style={styles.modalTitle}>Validation manuelle</Text>
-            {currentWordToValidate && (
+            <AlertCircle size={48} color="#FF9800" />
+            <Text style={styles.modalTitle}>Contester le mot</Text>
+            {contestedWord && (
               <>
                 <Text style={styles.modalText}>
-                  Le mot "<Text style={styles.modalWord}>{currentWordToValidate.word}</Text>" 
-                  de {currentWordToValidate.playerName}
+                  Le mot "<Text style={styles.modalWord}>{contestedWord.word}</Text>"
                 </Text>
                 <Text style={styles.modalCategory}>
-                  Catégorie: {currentWordToValidate.categoryName}
+                  Catégorie: {categories.find(c => c.id === contestedWord.categorie_id)?.nom}
                 </Text>
-                <Text style={styles.modalQuestion}>
-                  Ce mot est-il valide ?
-                </Text>
+                <Text style={styles.modalQuestion}>Ce mot est-il valide ?</Text>
                 <Text style={styles.modalInfo}>
                   Les deux joueurs doivent accepter pour valider
                 </Text>
+
+                {myVote !== null && (
+                  <Text style={styles.voteStatus}>
+                    Votre vote: {myVote ? '✓ Valide' : '✗ Invalide'}
+                  </Text>
+                )}
+
                 <View style={styles.modalButtons}>
                   <TouchableOpacity 
-                    style={[styles.modalButton, styles.rejectButton]}
-                    onPress={() => handleValidateWord(false)}
+                    style={[styles.modalButton, styles.rejectButton, myVote === false && styles.selectedButton]}
+                    onPress={() => handleVote(false)}
+                    disabled={myVote !== null}
                   >
                     <XCircle size={24} color="#fff" />
                     <Text style={styles.modalButtonText}>Invalide</Text>
                   </TouchableOpacity>
                   <TouchableOpacity 
-                    style={[styles.modalButton, styles.acceptButton]}
-                    onPress={() => handleValidateWord(true)}
+                    style={[styles.modalButton, styles.acceptButton, myVote === true && styles.selectedButton]}
+                    onPress={() => handleVote(true)}
+                    disabled={myVote !== null}
                   >
                     <CheckCircle size={24} color="#fff" />
                     <Text style={styles.modalButtonText}>Valide</Text>
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.modalProgress}>
-                  {currentValidationIndex + 1} / {wordsNeedingValidation.length}
-                </Text>
+
+                <Button
+                  title="Annuler"
+                  onPress={() => setShowValidationModal(false)}
+                  variant="secondary"
+                />
               </>
             )}
           </View>
@@ -571,6 +604,75 @@ const styles = StyleSheet.create({
     color: '#f44336',
     marginTop: 4,
     fontWeight: '600',
+  },
+  comparisonContainer: {
+    marginBottom: 24,
+  },
+  comparisonCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  categoryName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  comparisonRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  answerBlock: {
+    flex: 1,
+  },
+  answerLabel: {
+    fontSize: 12,
+    color: '#999',
+    marginBottom: 4,
+  },
+  answerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  answerWord: {
+    fontSize: 16,
+    color: '#333',
+    fontWeight: '500',
+    flex: 1,
+  },
+  noAnswer: {
+    fontSize: 16,
+    color: '#ccc',
+    fontStyle: 'italic',
+  },
+  pointsText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4caf50',
+  },
+  infoBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 16,
+    backgroundColor: '#fff3cd',
+    borderRadius: 12,
+    marginBottom: 24,
+  },
+  infoText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#856404',
   },
   buttonContainer: {
     gap: 12,
@@ -671,19 +773,17 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 400,
     alignItems: 'center',
+    gap: 12,
   },
   modalTitle: {
     fontSize: 24,
     fontWeight: '700',
     color: '#333',
-    marginTop: 16,
-    marginBottom: 16,
   },
   modalText: {
     fontSize: 16,
     color: '#333',
     textAlign: 'center',
-    marginBottom: 8,
   },
   modalWord: {
     fontWeight: '700',
@@ -692,19 +792,21 @@ const styles = StyleSheet.create({
   modalCategory: {
     fontSize: 14,
     color: '#666',
-    marginBottom: 16,
   },
   modalQuestion: {
     fontSize: 18,
     fontWeight: '600',
     color: '#333',
-    marginBottom: 8,
   },
   modalInfo: {
     fontSize: 12,
     color: '#999',
-    marginBottom: 24,
     textAlign: 'center',
+  },
+  voteStatus: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#4caf50',
   },
   modalButtons: {
     flexDirection: 'row',
@@ -726,14 +828,12 @@ const styles = StyleSheet.create({
   rejectButton: {
     backgroundColor: '#f44336',
   },
+  selectedButton: {
+    opacity: 0.6,
+  },
   modalButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',
-  },
-  modalProgress: {
-    fontSize: 14,
-    color: '#999',
-    marginTop: 16,
   },
 });

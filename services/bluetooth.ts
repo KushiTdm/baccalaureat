@@ -1,10 +1,7 @@
 // services/bluetooth.ts
-import { BleManager, Device, Characteristic } from 'react-native-ble-plx';
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform } from 'react-native';
 
-const SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
-const CHARACTERISTIC_UUID = '87654321-4321-4321-4321-cba987654321';
-
+// Types exportés
 export type GameMessage = {
   type: 'GAME_START' | 'ANSWER_SUBMIT' | 'GAME_END' | 'SYNC_DATA';
   data: any;
@@ -13,19 +10,49 @@ export type GameMessage = {
 export type BluetoothPlayer = {
   id: string;
   name: string;
-  device: Device;
+  device: any;
 };
 
+// Import conditionnel de BleManager (uniquement sur mobile)
+let BleManager: any = null;
+let PermissionsAndroid: any = null;
+
+if (Platform.OS !== 'web') {
+  try {
+    const bleModule = require('react-native-ble-plx');
+    BleManager = bleModule.BleManager;
+    
+    const rnModule = require('react-native');
+    PermissionsAndroid = rnModule.PermissionsAndroid;
+  } catch (error) {
+    console.warn('Bluetooth module not available');
+  }
+}
+
+const SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
+const CHARACTERISTIC_UUID = '87654321-4321-4321-4321-cba987654321';
+
 class BluetoothService {
-  private manager: BleManager;
-  private connectedDevice: Device | null = null;
+  private manager: any = null;
+  private connectedDevice: any = null;
   private onMessageReceived: ((message: GameMessage) => void) | null = null;
 
   constructor() {
-    this.manager = new BleManager();
+    // Initialiser le manager seulement sur mobile
+    if (Platform.OS !== 'web' && BleManager) {
+      this.manager = new BleManager();
+    }
   }
 
   async requestPermissions(): Promise<boolean> {
+    if (Platform.OS === 'web') {
+      return false; // Bluetooth non supporté sur web
+    }
+
+    if (!PermissionsAndroid) {
+      return false;
+    }
+
     if (Platform.OS === 'android' && Platform.Version >= 31) {
       const granted = await PermissionsAndroid.requestMultiple([
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
@@ -47,18 +74,22 @@ class BluetoothService {
   }
 
   async scanForDevices(
-    onDeviceFound: (device: Device) => void,
+    onDeviceFound: (device: any) => void,
     duration: number = 10000
   ): Promise<void> {
+    if (Platform.OS === 'web' || !this.manager) {
+      throw new Error('Bluetooth non disponible sur cette plateforme');
+    }
+
     const hasPermission = await this.requestPermissions();
     if (!hasPermission) {
-      throw new Error('Bluetooth permissions not granted');
+      throw new Error('Permissions Bluetooth refusées');
     }
 
     return new Promise((resolve, reject) => {
       const foundDevices = new Set<string>();
 
-      this.manager.startDeviceScan(null, null, (error, device) => {
+      this.manager.startDeviceScan(null, null, (error: any, device: any) => {
         if (error) {
           this.manager.stopDeviceScan();
           reject(error);
@@ -78,13 +109,16 @@ class BluetoothService {
     });
   }
 
-  async connectToDevice(device: Device): Promise<void> {
+  async connectToDevice(device: any): Promise<void> {
+    if (Platform.OS === 'web' || !this.manager) {
+      throw new Error('Bluetooth non disponible sur cette plateforme');
+    }
+
     try {
       const connected = await device.connect();
       await connected.discoverAllServicesAndCharacteristics();
       this.connectedDevice = connected;
 
-      // Start monitoring for messages
       this.startMonitoring();
     } catch (error) {
       console.error('Connection error:', error);
@@ -100,8 +134,12 @@ class BluetoothService {
   }
 
   async sendMessage(message: GameMessage): Promise<void> {
+    if (Platform.OS === 'web') {
+      throw new Error('Bluetooth non disponible sur web');
+    }
+
     if (!this.connectedDevice) {
-      throw new Error('No device connected');
+      throw new Error('Aucun appareil connecté');
     }
 
     const jsonString = JSON.stringify(message);
@@ -125,7 +163,7 @@ class BluetoothService {
     this.connectedDevice.monitorCharacteristicForService(
       SERVICE_UUID,
       CHARACTERISTIC_UUID,
-      (error, characteristic) => {
+      (error: any, characteristic: any) => {
         if (error) {
           console.error('Monitor error:', error);
           return;
@@ -155,12 +193,14 @@ class BluetoothService {
     return this.connectedDevice !== null;
   }
 
-  getConnectedDevice(): Device | null {
+  getConnectedDevice(): any {
     return this.connectedDevice;
   }
 
   destroy(): void {
-    this.manager.destroy();
+    if (this.manager) {
+      this.manager.destroy();
+    }
   }
 }
 

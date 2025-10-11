@@ -1,4 +1,4 @@
-// app/online-setup.tsx
+// app/online-setup.tsx - VERSION AVEC DEBUG
 import { View, Text, StyleSheet, TextInput, Alert, ActivityIndicator, FlatList, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
@@ -34,7 +34,7 @@ export default function OnlineSetupScreen() {
 
   useEffect(() => {
     if (waitingRoom) {
-      // Charger les joueurs et surveiller
+      console.log('🎮 Waiting room set:', waitingRoom);
       loadPlayersAndWatch();
     }
 
@@ -45,6 +45,7 @@ export default function OnlineSetupScreen() {
 
   async function loadAvailableRooms() {
     try {
+      console.log('📋 Loading available rooms...');
       const { data, error } = await supabase
         .from('game_rooms')
         .select('*')
@@ -52,9 +53,13 @@ export default function OnlineSetupScreen() {
         .order('created_at', { ascending: false })
         .limit(20);
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Error loading rooms:', error);
+        throw error;
+      }
 
-      // Pour chaque room, compter les joueurs
+      console.log('✅ Rooms loaded:', data?.length || 0);
+
       const roomsWithCount = await Promise.all(
         (data || []).map(async (room) => {
           const { data: players } = await supabase
@@ -69,11 +74,11 @@ export default function OnlineSetupScreen() {
         })
       );
 
-      // Filtrer les rooms qui ne sont pas pleines
       const availableRooms = roomsWithCount.filter(r => r.playerCount < r.max_players);
+      console.log('✅ Available rooms:', availableRooms.length);
       setAvailableRooms(availableRooms as any);
     } catch (error) {
-      console.error('Error loading rooms:', error);
+      console.error('❌ Error loading rooms:', error);
     }
   }
 
@@ -87,61 +92,99 @@ export default function OnlineSetupScreen() {
     if (!waitingRoom) return;
 
     try {
-      // Charger les joueurs actuels
+      console.log('👥 Loading players for room:', waitingRoom.roomId);
       const playersList = await onlineService.getPlayers(waitingRoom.roomId);
+      console.log('✅ Players loaded:', playersList.length, playersList.map(p => p.player_name));
       setPlayers(playersList);
 
-      // Si 2 joueurs, lancer automatiquement
       if (playersList.length >= 2) {
+        console.log('🚀 2 players detected, starting game...');
         await handleAutoStart();
         return;
       }
 
-      // Sinon, écouter les changements avec polling (plus fiable que Realtime)
+      console.log('⏳ Starting polling for 2nd player...');
       const interval = setInterval(async () => {
+        console.log('🔄 Polling for players...');
         const updatedPlayers = await onlineService.getPlayers(waitingRoom.roomId);
+        console.log('👥 Current players:', updatedPlayers.length);
         setPlayers(updatedPlayers);
 
         if (updatedPlayers.length >= 2) {
+          console.log('🎉 2 players found!');
           clearInterval(interval);
           await handleAutoStart();
         }
-      }, 1000); // Vérifier toutes les secondes
+      }, 1000);
 
-      // Nettoyer l'intervalle au démontage
-      return () => clearInterval(interval);
+      return () => {
+        console.log('🛑 Stopping polling');
+        clearInterval(interval);
+      };
     } catch (error) {
-      console.error('Error loading players:', error);
+      console.error('❌ Error loading players:', error);
+      Alert.alert('Erreur', 'Impossible de charger les joueurs');
     }
   }
 
   async function handleAutoStart() {
-    if (!waitingRoom) return;
+    if (!waitingRoom) {
+      console.error('❌ No waiting room!');
+      return;
+    }
+
+    console.log('🎮 Auto-starting game...');
+    console.log('Room:', waitingRoom);
 
     try {
-      // Seul l'hôte démarre la partie
-      if (waitingRoom.isHost) {
-        await onlineService.startGame(waitingRoom.roomId);
+      // IMPORTANT: Recharger les joueurs dans cette fonction
+      console.log('🔄 Reloading players...');
+      const currentPlayers = await onlineService.getPlayers(waitingRoom.roomId);
+      console.log('✅ Current players loaded:', currentPlayers.length, currentPlayers.map(p => p.player_name));
+
+      if (currentPlayers.length < 2) {
+        console.error('❌ Not enough players:', currentPlayers.length);
+        Alert.alert('Erreur', 'Pas assez de joueurs');
+        return;
       }
 
-      // Petite pause pour laisser le statut se mettre à jour
+      const opponent = currentPlayers.find(p => p.id !== waitingRoom.playerId);
+      console.log('👥 Opponent:', opponent?.player_name);
+
+      if (!opponent) {
+        console.error('❌ No opponent found!');
+        Alert.alert('Erreur', 'Adversaire introuvable');
+        return;
+      }
+
+      if (waitingRoom.isHost) {
+        console.log('👑 I am host, starting game...');
+        await onlineService.startGame(waitingRoom.roomId);
+        console.log('✅ Game started by host');
+      } else {
+        console.log('👤 I am not host, waiting...');
+      }
+
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // Charger les catégories et démarrer
+      console.log('📚 Loading categories...');
       const categories = await getCategories();
-      const opponent = players.find(p => p.id !== waitingRoom.playerId);
+      console.log('✅ Categories loaded:', categories.length);
 
+      console.log('🎯 Starting multiplayer game in store...');
       startMultiplayerGame(
         waitingRoom.letter,
         categories,
         waitingRoom.isHost,
-        opponent?.player_name || 'Adversaire'
+        opponent.player_name
       );
 
+      console.log('🎮 Navigating to game...');
       router.push('/online-game');
+      console.log('✅ Navigation complete');
     } catch (error) {
-      console.error('Error starting game:', error);
-      Alert.alert('Erreur', 'Impossible de démarrer la partie');
+      console.error('❌ Error starting game:', error);
+      Alert.alert('Erreur', 'Impossible de démarrer la partie: ' + (error as Error).message);
     }
   }
 
@@ -153,6 +196,7 @@ export default function OnlineSetupScreen() {
 
     setLoading(true);
     try {
+      console.log('🏗️ Creating room for:', playerName);
       const categories = await getCategories();
       if (categories.length === 0) {
         Alert.alert('Erreur', 'Aucune catégorie disponible');
@@ -160,7 +204,11 @@ export default function OnlineSetupScreen() {
       }
 
       const randomLetter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
+      console.log('🔤 Random letter:', randomLetter);
+      
       const { room, player } = await onlineService.createRoom(playerName.trim(), randomLetter);
+      console.log('✅ Room created:', room.room_code);
+      console.log('✅ Player created:', player.player_name);
 
       setWaitingRoom({
         roomId: room.id,
@@ -170,6 +218,7 @@ export default function OnlineSetupScreen() {
         letter: randomLetter,
       });
     } catch (error) {
+      console.error('❌ Error creating room:', error);
       Alert.alert('Erreur', 'Impossible de créer la salle');
     } finally {
       setLoading(false);
@@ -184,16 +233,23 @@ export default function OnlineSetupScreen() {
 
     setLoading(true);
     try {
+      console.log('🚪 Joining room:', room.room_code, 'as', playerName);
       const { room: joinedRoom, player } = await onlineService.joinRoom(room.room_code, playerName.trim());
+      console.log('✅ Joined room:', joinedRoom.room_code);
+      console.log('✅ Player created:', player.player_name, 'ID:', player.id);
 
-      setWaitingRoom({
+      const waitingRoomData = {
         roomId: joinedRoom.id,
         roomCode: joinedRoom.room_code,
         playerId: player.id,
         isHost: false,
         letter: joinedRoom.letter,
-      });
+      };
+
+      console.log('💾 Setting waiting room:', waitingRoomData);
+      setWaitingRoom(waitingRoomData);
     } catch (error: any) {
+      console.error('❌ Error joining room:', error);
       Alert.alert('Erreur', error.message || 'Impossible de rejoindre la salle');
     } finally {
       setLoading(false);
@@ -282,6 +338,18 @@ export default function OnlineSetupScreen() {
               </Text>
             </View>
           )}
+        </View>
+
+        <View style={styles.debugInfo}>
+          <Text style={styles.debugText}>
+            Room ID: {waitingRoom.roomId.substring(0, 8)}...
+          </Text>
+          <Text style={styles.debugText}>
+            Player ID: {waitingRoom.playerId.substring(0, 8)}...
+          </Text>
+          <Text style={styles.debugText}>
+            Is Host: {waitingRoom.isHost ? 'Oui' : 'Non'}
+          </Text>
         </View>
 
         <View style={styles.buttonContainer}>
@@ -601,6 +669,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#4caf50',
     fontWeight: '600',
+  },
+  debugInfo: {
+    backgroundColor: '#fff3cd',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+  },
+  debugText: {
+    fontSize: 12,
+    color: '#856404',
+    fontFamily: 'monospace',
   },
   roomsSection: {
     flex: 1,
