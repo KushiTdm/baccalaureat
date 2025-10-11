@@ -4,7 +4,7 @@
     "slug": "petit-bac",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": ".",
+    "icon": "./assets/images/icon.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
