@@ -1,5 +1,5 @@
-// app/online-game.tsx - FIX du useEffect
-import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
+// app/online-game.tsx - VERSION AMÉLIORÉE avec animations
+import { View, Text, StyleSheet, ScrollView, Alert, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState, useEffect, useRef } from 'react';
 import { useGameStore } from '../store/gameStore';
@@ -9,14 +9,35 @@ import Button from '../components/Button';
 import { validateWord } from '../services/api';
 import { onlineService, EndGameRequest } from '../services/online';
 import { GameResult } from '../store/gameStore';
-import { Send, Flag, Clock } from 'lucide-react-native';
+import { Send, Flag, Clock, Zap, Users, Trophy, AlertCircle } from 'lucide-react-native';
+import Animated, { 
+  FadeIn, 
+  FadeInDown, 
+  FadeInUp, 
+  SlideInRight,
+  SlideInLeft,
+  BounceIn,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withSequence,
+  withRepeat,
+  withTiming,
+  Easing,
+} from 'react-native-reanimated';
+
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const SAFE_AREA_HEIGHT = SCREEN_HEIGHT * 0.25;
 
 export default function OnlineGameScreen() {
   const router = useRouter();
+  const pulseAnim = useSharedValue(1);
+  const shakeAnim = useSharedValue(0);
+  
   const {
     currentLetter,
     categories,
-    answers, // ✅ Garder pour le rendu
+    answers,
     setAnswer,
     setMultiplayerResults,
     endGame,
@@ -25,7 +46,6 @@ export default function OnlineGameScreen() {
     setEndGameRequested,
   } = useGameStore();
 
-  // ✅ FIX: Fonction pour lire answers du store dans les callbacks asynchrones
   const getAnswers = () => useGameStore.getState().answers;
 
   const [submitting, setSubmitting] = useState(false);
@@ -37,24 +57,28 @@ export default function OnlineGameScreen() {
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const requestCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    const roomId = onlineService.getCurrentRoomId();
-    const playerId = onlineService.getCurrentPlayerId();
+  const roomId = onlineService.getCurrentRoomId();
+  const playerId = onlineService.getCurrentPlayerId();
+  const roundId = onlineService.getCurrentRoundId();
 
-    // ✅ FIX: Ne vérifier que roomId et playerId ici
+  useEffect(() => {
     if (!roomId || !playerId) {
-      console.error('❌ Missing room or player ID');
       router.replace('/');
       return;
     }
 
-    console.log('✅ Starting game with room:', roomId, 'player:', playerId);
+    // Animation du pulse pour la lettre
+    pulseAnim.value = withRepeat(
+      withSequence(
+        withSpring(1.1, { damping: 2 }),
+        withSpring(1, { damping: 2 })
+      ),
+      -1,
+      true
+    );
 
-    // ✅ Démarrer le polling immédiatement
     startPolling();
     startRequestPolling();
-    
-    // Initialiser le round en parallèle
     initializeRound();
 
     return () => {
@@ -65,22 +89,15 @@ export default function OnlineGameScreen() {
   }, []);
 
   async function initializeRound() {
-    const roomId = onlineService.getCurrentRoomId();
     if (!roomId) return;
-
-    console.log('🎲 Initializing round for room:', roomId);
 
     let round = await onlineService.getCurrentRound(roomId);
 
     if (!round) {
-      console.log('📝 No current round, creating new one...');
       const room = await onlineService.getRoom(roomId);
       if (room) {
         round = await onlineService.createRound(roomId, currentRound, room.letter);
-        console.log('✅ Round created:', round.id);
       }
-    } else {
-      console.log('✅ Current round found:', round.id);
     }
 
     if (round) {
@@ -91,7 +108,7 @@ export default function OnlineGameScreen() {
   function startPolling() {
     pollingIntervalRef.current = setInterval(async () => {
       await checkOpponentStatus();
-    }, 500); // ✅ Vérifier toutes les 500ms au lieu de 1000ms
+    }, 500);
   }
 
   function stopPolling() {
@@ -101,11 +118,10 @@ export default function OnlineGameScreen() {
     }
   }
 
-  // Polling pour vérifier les demandes de fin reçues
   function startRequestPolling() {
     requestCheckIntervalRef.current = setInterval(async () => {
       await checkEndGameRequests();
-    }, 2000); // Vérifier toutes les 2 secondes
+    }, 2000);
   }
 
   function stopRequestPolling() {
@@ -117,11 +133,6 @@ export default function OnlineGameScreen() {
 
   async function checkEndGameRequests() {
     if (hasSubmitted || endGameRequestPending) return;
-
-    const roomId = onlineService.getCurrentRoomId();
-    const playerId = onlineService.getCurrentPlayerId();
-    const roundId = onlineService.getCurrentRoundId();
-
     if (!roomId || !playerId || !roundId) return;
 
     try {
@@ -129,7 +140,7 @@ export default function OnlineGameScreen() {
 
       if (request && request.requester_player_id !== playerId && !receivedEndGameRequest) {
         setReceivedEndGameRequest(request);
-        stopRequestPolling(); // Arrêter le polling pendant la demande
+        stopRequestPolling();
 
         Alert.alert(
           'Demande de fin',
@@ -141,7 +152,7 @@ export default function OnlineGameScreen() {
               onPress: async () => {
                 await onlineService.respondToEndGameRequest(request.id, false);
                 setReceivedEndGameRequest(null);
-                startRequestPolling(); // Redémarrer le polling
+                startRequestPolling();
               },
             },
             {
@@ -149,7 +160,7 @@ export default function OnlineGameScreen() {
               onPress: async () => {
                 await onlineService.respondToEndGameRequest(request.id, true);
                 setReceivedEndGameRequest(null);
-                await handleSubmit(false); // Pas de pénalité
+                await handleSubmit(false);
               },
             },
           ],
@@ -162,40 +173,26 @@ export default function OnlineGameScreen() {
   }
 
   async function checkOpponentStatus() {
-    if (hasSubmitted) {
-      console.log('⏭️ Already submitted, skipping check');
-      return;
-    }
-
-    const roomId = onlineService.getCurrentRoomId();
-    const playerId = onlineService.getCurrentPlayerId();
-    const roundId = onlineService.getCurrentRoundId();
-
-    if (!roomId || !playerId || !roundId) return;
+    if (hasSubmitted || !roomId || !playerId || !roundId) return;
 
     try {
       const scores = await onlineService.getRoundScores(roundId);
       const opponentScore = scores.find(s => s.player_id !== playerId);
 
       if (opponentScore && opponentScore.finished_at && !submitting) {
-        console.log('🛑 Opponent finished! Auto-submitting...');
-        
-        // ✅ FIX: Lire answers directement du store
-        const currentAnswers = getAnswers();
-        console.log('📋 Current answers in state:', currentAnswers);
-        console.log('📊 Answers count:', currentAnswers.length, '/ Categories:', categories.length);
-        
         stopPolling();
         stopRequestPolling();
-        
-        // ✅ Afficher un message visuel
         setOpponentFinished(true);
-        
-        // ✅ Soumettre après 1 seconde pour laisser voir le message
+
+        // Animation de shake
+        shakeAnim.value = withSequence(
+          withTiming(10, { duration: 100 }),
+          withTiming(-10, { duration: 100 }),
+          withTiming(10, { duration: 100 }),
+          withTiming(0, { duration: 100 })
+        );
+
         setTimeout(async () => {
-          console.log('⏰ Timeout reached, submitting now...');
-          const answersAtSubmit = getAnswers();
-          console.log('📋 Answers at submit time:', answersAtSubmit);
           await handleAutoSubmit();
         }, 1000);
       }
@@ -205,7 +202,6 @@ export default function OnlineGameScreen() {
   }
 
   if (!currentLetter || categories.length === 0) {
-    console.error('❌ Missing game data, redirecting...');
     router.replace('/');
     return null;
   }
@@ -215,10 +211,6 @@ export default function OnlineGameScreen() {
   }
 
   async function handleRequestEndGame() {
-    const roomId = onlineService.getCurrentRoomId();
-    const playerId = onlineService.getCurrentPlayerId();
-    const roundId = onlineService.getCurrentRoundId();
-
     if (!roomId || !playerId || !roundId) {
       Alert.alert('Erreur', 'Données de partie manquantes');
       return;
@@ -238,7 +230,6 @@ export default function OnlineGameScreen() {
             try {
               await onlineService.requestEndGame(roomId, roundId, playerId);
               
-              // Polling pour la réponse
               let responseReceived = false;
               const checkResponse = setInterval(async () => {
                 const request = await onlineService.getPendingEndGameRequest(roomId, roundId);
@@ -258,7 +249,6 @@ export default function OnlineGameScreen() {
                 }
               }, 1000);
 
-              // Timeout après 30 secondes
               setTimeout(() => {
                 if (!responseReceived) {
                   clearInterval(checkResponse);
@@ -280,97 +270,56 @@ export default function OnlineGameScreen() {
   }
 
   async function handleAutoSubmit() {
-    // ✅ FIX: Lire answers directement du store
-    const currentAnswers = getAnswers();
-    console.log('🤖 AUTO-SUBMIT TRIGGERED');
-    console.log('📋 Current answers:', currentAnswers);
-    console.log('📊 Answers count:', currentAnswers.length);
-    console.log('🎯 Categories:', categories.map(c => c.nom));
-    
-    // ✅ FIX: Le joueur 2 n'a PAS arrêté volontairement, mais on doit valider ce qu'il a écrit
-    await handleSubmit(false); // false = pas de pénalité car pas de sa faute
+    await handleSubmit(false);
   }
 
   async function handleSubmit(stoppedEarly: boolean = true) {
-    console.log('🚀 HANDLE SUBMIT CALLED');
-    console.log('   - stoppedEarly:', stoppedEarly);
-    console.log('   - submitting:', submitting);
-    console.log('   - hasSubmitted:', hasSubmitted);
-    
-    if (submitting || hasSubmitted) {
-      console.log('⚠️ Already submitting or submitted, aborting');
-      return;
-    }
+    if (submitting || hasSubmitted) return;
 
-    console.log('✅ Proceeding with submission...');
-    
     setSubmitting(true);
     setHasSubmitted(true);
     stopPolling();
     stopRequestPolling();
     endGame();
 
-    const roomId = onlineService.getCurrentRoomId();
-    const playerId = onlineService.getCurrentPlayerId();
-    const roundId = onlineService.getCurrentRoundId();
-
-    console.log('🔑 IDs:', { roomId, playerId, roundId });
-
     if (!roomId || !playerId || !roundId) {
-      console.error('❌ Missing required IDs');
       Alert.alert('Erreur', 'Impossible de soumettre les réponses');
       router.replace('/');
       return;
     }
 
     try {
-      // ✅ FIX CRITIQUE: Lire answers directement du store au moment de la soumission
       const answers = getAnswers();
-      
       const myResults: GameResult[] = [];
       let myScore = 0;
       let hasInvalidWord = false;
       const allFieldsFilled = answers.length === categories.length && 
                               answers.every(a => a.word.trim() !== '');
 
-      console.log('📝 Submitting answers:', answers.length, 'categories:', categories.length);
-      console.log('📋 Answers:', answers.map(a => `${a.categorieName}: "${a.word}"`));
-      console.log('🎯 Stopped early:', stoppedEarly, 'All fields filled:', allFieldsFilled);
-
       for (const category of categories) {
         const answer = answers.find((a) => a.categorieId === category.id);
         const word = answer?.word?.trim() || '';
 
-        console.log(`🔍 Checking category "${category.nom}": word="${word}"`);
-
         let isValid = false;
         let points = 0;
 
-        // ✅ FIX: Valider tous les mots saisis, peu importe si tous les champs sont remplis
         if (word) {
           if (word.toLowerCase().startsWith(currentLetter.toLowerCase())) {
             try {
-              console.log(`  ✅ Word starts with ${currentLetter}, validating...`);
               isValid = await validateWord(word, category.id);
               
               if (isValid) {
                 points = 2;
                 myScore += points;
-                console.log(`  ✅ Valid! +${points} points`);
               } else {
                 hasInvalidWord = true;
-                console.log(`  ❌ Invalid word`);
               }
             } catch (error) {
-              console.error('  ❌ Validation error:', error);
+              console.error('Validation error:', error);
             }
           } else {
-            // Mot ne commence pas par la bonne lettre
             hasInvalidWord = true;
-            console.log(`  ❌ Does not start with ${currentLetter}`);
           }
-        } else {
-          console.log(`  ⚪ Empty field`);
         }
 
         myResults.push({
@@ -381,7 +330,6 @@ export default function OnlineGameScreen() {
           points,
         });
 
-        // ✅ Soumettre tous les mots, même vides
         try {
           await onlineService.submitAnswer(
             roomId,
@@ -398,16 +346,12 @@ export default function OnlineGameScreen() {
         }
       }
 
-      // Appliquer pénalité si arrêt prématuré avec mot invalide
       let penaltyApplied = false;
       if (stoppedEarly && allFieldsFilled && hasInvalidWord) {
         const penalty = 3;
         myScore = Math.max(0, myScore - penalty);
         penaltyApplied = true;
-        console.log('⚠️ Penalty applied:', penalty, 'New score:', myScore);
       }
-
-      console.log('✅ Final score:', myScore, 'Valid words:', myResults.filter(r => r.isValid).length);
 
       const validWordsCount = myResults.filter(r => r.isValid).length;
       await onlineService.submitRoundScore(
@@ -421,16 +365,7 @@ export default function OnlineGameScreen() {
 
       setMultiplayerResults(myResults, myScore, stoppedEarly && allFieldsFilled);
 
-      // ✅ FIX: Attendre que l'adversaire ait aussi soumis
-      console.log('⏳ Waiting for opponent to submit...');
-      const bothSubmitted = await waitForOpponentSubmission();
-
-      if (bothSubmitted) {
-        console.log('✅ Both players submitted, going to results');
-      } else {
-        console.log('⏰ Timeout, going to results anyway');
-      }
-
+      await waitForOpponentSubmission();
       router.push('/online-results');
     } catch (error) {
       console.error('Submit error:', error);
@@ -441,30 +376,22 @@ export default function OnlineGameScreen() {
   }
 
   async function waitForOpponentSubmission(): Promise<boolean> {
-    const roomId = onlineService.getCurrentRoomId();
-    const playerId = onlineService.getCurrentPlayerId();
-    const roundId = onlineService.getCurrentRoundId();
-
     if (!roomId || !playerId || !roundId) return false;
 
     return new Promise<boolean>((resolve) => {
       let checksCount = 0;
-      const maxChecks = 60; // 30 secondes max (60 * 500ms)
+      const maxChecks = 60;
 
       const checkInterval = setInterval(async () => {
         checksCount++;
         
         try {
           const scores = await onlineService.getRoundScores(roundId);
-          console.log(`🔍 Check ${checksCount}/${maxChecks}: ${scores.length} scores found`);
           
           if (scores.length >= 2) {
-            console.log('✅ Both players have submitted!');
             clearInterval(checkInterval);
-            // Attendre 500ms de plus pour être sûr que tout est bien enregistré
             setTimeout(() => resolve(true), 500);
           } else if (checksCount >= maxChecks) {
-            console.log('⏰ Timeout waiting for opponent');
             clearInterval(checkInterval);
             resolve(false);
           }
@@ -478,53 +405,127 @@ export default function OnlineGameScreen() {
   const allFieldsFilled = answers.length === categories.length && 
                           answers.every(a => a.word.trim() !== '');
 
+  const pulseStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: pulseAnim.value }],
+    };
+  });
+
+  const shakeStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ translateX: shakeAnim.value }],
+    };
+  });
+
+  const filledCount = answers.filter(a => a.word.trim() !== '').length;
+  const progressPercent = (filledCount / categories.length) * 100;
+
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.roundInfo}>
-          <Text style={styles.roundLabel}>Manche {currentRound}</Text>
+      <Animated.View 
+        entering={FadeIn.duration(600)} 
+        style={styles.backgroundGradient}
+      />
+      
+      <Animated.View 
+        entering={SlideInRight.springify()} 
+        style={styles.header}
+      >
+        <View style={styles.headerTop}>
+          <Animated.View 
+            entering={FadeInDown.delay(100).springify()}
+            style={styles.roundBadge}
+          >
+            <Trophy size={16} color="#FFD700" />
+            <Text style={styles.roundLabel}>Manche {currentRound}</Text>
+          </Animated.View>
+
+          <Animated.View 
+            entering={FadeInDown.delay(200).springify()}
+            style={styles.opponentBadge}
+          >
+            <Users size={16} color="#007AFF" />
+            <Text style={styles.opponentName}>{opponentName}</Text>
+          </Animated.View>
         </View>
-        <View style={styles.letterContainer}>
+
+        <Animated.View 
+          entering={BounceIn.delay(300)}
+          style={[styles.letterContainer, pulseStyle]}
+        >
           <Text style={styles.letterLabel}>Lettre</Text>
-          <Text style={styles.letter}>{currentLetter.toUpperCase()}</Text>
-        </View>
-        <View style={styles.opponentInfo}>
-          <Text style={styles.opponentLabel}>VS</Text>
-          <Text style={styles.opponentName}>{opponentName}</Text>
-        </View>
-        <Timer onTimeUp={handleTimeUp} />
-      </View>
+          <View style={styles.letterCircle}>
+            <Text style={styles.letter}>{currentLetter.toUpperCase()}</Text>
+          </View>
+        </Animated.View>
+
+        <Animated.View 
+          entering={FadeInUp.delay(400)}
+          style={styles.progressContainer}
+        >
+          <View style={styles.progressBar}>
+            <Animated.View 
+              style={[
+                styles.progressFill, 
+                { width: `${progressPercent}%` }
+              ]} 
+            />
+          </View>
+          <Text style={styles.progressText}>
+            {filledCount}/{categories.length} catégories
+          </Text>
+        </Animated.View>
+
+        <Animated.View entering={FadeInUp.delay(500)}>
+          <Timer onTimeUp={handleTimeUp} />
+        </Animated.View>
+      </Animated.View>
 
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {categories.map((category) => {
+        {categories.map((category, index) => {
           const answer = answers.find((a) => a.categorieId === category.id);
           return (
-            <InputWord
+            <Animated.View
               key={category.id}
-              category={category.nom}
-              value={answer?.word || ''}
-              onChangeText={(text) => setAnswer(category.id, text)}
-              letter={currentLetter}
-            />
+              entering={FadeInDown.delay(600 + index * 50).springify()}
+            >
+              <InputWord
+                category={category.nom}
+                value={answer?.word || ''}
+                onChangeText={(text) => setAnswer(category.id, text)}
+                letter={currentLetter}
+              />
+            </Animated.View>
           );
         })}
 
-        <View style={styles.actionsContainer}>
+        <Animated.View 
+          entering={FadeInUp.delay(800)} 
+          style={styles.actionsContainer}
+        >
           {opponentFinished && (
-            <View style={styles.opponentFinishedNotice}>
-              <Flag size={20} color="#ff9800" />
-              <Text style={styles.opponentFinishedText}>
-                {opponentName} a validé ! Fin de la manche...
-              </Text>
-            </View>
+            <Animated.View 
+              entering={BounceIn}
+              style={[styles.opponentFinishedNotice, shakeStyle]}
+            >
+              <Zap size={24} color="#ff9800" />
+              <View style={styles.noticeTextContainer}>
+                <Text style={styles.opponentFinishedTitle}>
+                  {opponentName} a terminé !
+                </Text>
+                <Text style={styles.opponentFinishedText}>
+                  Validation automatique dans 1 seconde...
+                </Text>
+              </View>
+            </Animated.View>
           )}
 
           <Button
-            title="Valider tous les mots"
+            title={submitting ? "Envoi en cours..." : "Valider mes réponses"}
             onPress={() => handleSubmit(true)}
             loading={submitting}
             disabled={!allFieldsFilled || endGameRequestPending || opponentFinished}
@@ -532,7 +533,7 @@ export default function OnlineGameScreen() {
           />
 
           <Button
-            title="Demander la fin"
+            title="Demander l'arrêt"
             onPress={handleRequestEndGame}
             variant="secondary"
             disabled={endGameRequestPending || submitting || opponentFinished}
@@ -540,22 +541,41 @@ export default function OnlineGameScreen() {
           />
 
           {endGameRequestPending && (
-            <View style={styles.waitingNotice}>
-              <Clock size={16} color="#666" />
+            <Animated.View 
+              entering={FadeInDown.springify()}
+              style={styles.waitingNotice}
+            >
+              <Clock size={20} color="#FF9800" />
               <Text style={styles.waitingText}>
-                En attente de la réponse...
+                En attente de la réponse de {opponentName}...
               </Text>
-            </View>
+            </Animated.View>
           )}
 
           {receivedEndGameRequest && (
-            <View style={styles.requestNotice}>
+            <Animated.View 
+              entering={BounceIn}
+              style={styles.requestNotice}
+            >
+              <AlertCircle size={20} color="#007AFF" />
               <Text style={styles.requestText}>
-                {opponentName} demande à arrêter
+                {opponentName} demande à arrêter la manche
               </Text>
-            </View>
+            </Animated.View>
           )}
-        </View>
+
+          {!allFieldsFilled && (
+            <Animated.View 
+              entering={FadeIn.delay(1000)}
+              style={styles.hintBox}
+            >
+              <AlertCircle size={16} color="#FF9800" />
+              <Text style={styles.hintText}>
+                Remplissez toutes les catégories pour valider
+              </Text>
+            </Animated.View>
+          )}
+        </Animated.View>
       </ScrollView>
     </View>
   );
@@ -564,62 +584,127 @@ export default function OnlineGameScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#0a0e27',
+  },
+  backgroundGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#0a0e27',
   },
   header: {
-    backgroundColor: '#fff',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     paddingTop: 60,
     paddingBottom: 20,
     paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
-  roundInfo: {
+  headerTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  roundBadge: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    gap: 6,
+    backgroundColor: 'rgba(255, 215, 0, 0.1)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 215, 0, 0.3)',
   },
   roundLabel: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFD700',
+  },
+  opponentBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.3)',
+  },
+  opponentName: {
+    fontSize: 14,
+    fontWeight: '700',
     color: '#007AFF',
   },
   letterContainer: {
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 20,
   },
   letterLabel: {
     fontSize: 14,
-    color: '#666',
-    marginBottom: 4,
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginBottom: 12,
+    fontWeight: '600',
+    letterSpacing: 1,
+  },
+  letterCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(0, 122, 255, 0.15)',
+    borderWidth: 3,
+    borderColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#007AFF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 12,
+    elevation: 8,
   },
   letter: {
     fontSize: 48,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#007AFF',
+    textShadowColor: 'rgba(0, 122, 255, 0.5)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 8,
   },
-  opponentInfo: {
-    alignItems: 'center',
+  progressContainer: {
     marginBottom: 16,
   },
-  opponentLabel: {
-    fontSize: 12,
-    color: '#999',
-    marginBottom: 4,
+  progressBar: {
+    height: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 8,
   },
-  opponentName: {
-    fontSize: 18,
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#4caf50',
+    borderRadius: 4,
+  },
+  progressText: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.6)',
+    textAlign: 'center',
     fontWeight: '600',
-    color: '#333',
   },
   scrollView: {
     flex: 1,
   },
   scrollContent: {
     padding: 20,
-    paddingBottom: 40,
+    paddingBottom: SAFE_AREA_HEIGHT,
   },
   actionsContainer: {
     marginTop: 24,
@@ -628,41 +713,78 @@ const styles = StyleSheet.create({
   opponentFinishedNotice: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    padding: 16,
-    backgroundColor: '#fff3e0',
-    borderRadius: 12,
+    gap: 16,
+    padding: 20,
+    backgroundColor: 'rgba(255, 152, 0, 0.15)',
+    borderRadius: 16,
     borderWidth: 2,
     borderColor: '#ff9800',
+    shadowColor: '#ff9800',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  noticeTextContainer: {
+    flex: 1,
+  },
+  opponentFinishedTitle: {
+    fontSize: 16,
+    color: '#fff',
+    fontWeight: '800',
+    marginBottom: 4,
   },
   opponentFinishedText: {
-    fontSize: 16,
-    color: '#e65100',
-    fontWeight: '700',
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '500',
   },
   waitingNotice: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    padding: 12,
-    backgroundColor: '#fff3cd',
-    borderRadius: 8,
+    gap: 12,
+    padding: 16,
+    backgroundColor: 'rgba(255, 152, 0, 0.1)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 152, 0, 0.3)',
   },
   waitingText: {
     fontSize: 14,
-    color: '#666',
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '600',
   },
   requestNotice: {
-    padding: 12,
-    backgroundColor: '#d1ecf1',
-    borderRadius: 8,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    padding: 16,
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.3)',
   },
   requestText: {
     fontSize: 14,
-    color: '#0c5460',
-    fontWeight: '600',
+    color: '#fff',
+    fontWeight: '700',
+  },
+  hintBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    backgroundColor: 'rgba(255, 152, 0, 0.1)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 152, 0, 0.2)',
+  },
+  hintText: {
+    flex: 1,
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontWeight: '500',
   },
 });

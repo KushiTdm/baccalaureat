@@ -1,19 +1,39 @@
-// app/online-setup.tsx - VERSION AVEC DEBUG
-import { View, Text, StyleSheet, TextInput, Alert, ActivityIndicator, FlatList, RefreshControl } from 'react-native';
+// app/online-setup.tsx - VERSION AMÉLIORÉE avec animations
+import { View, Text, StyleSheet, TextInput, ScrollView, Alert, ActivityIndicator, FlatList, RefreshControl, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import Button from '../components/Button';
 import { onlineService, GameRoom, GameRoomPlayer } from '../services/online';
 import { useGameStore } from '../store/gameStore';
 import { getCategories } from '../services/api';
-import { Globe, UserPlus, Users, Play, RefreshCw } from 'lucide-react-native';
+import { Globe, UserPlus, Users, Play, RefreshCw, ArrowLeft, Copy, Clock, Zap, Crown, LogIn } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import Animated, { 
+  FadeIn, 
+  FadeInDown, 
+  FadeInUp, 
+  SlideInRight,
+  SlideInLeft,
+  BounceIn,
+  ZoomIn,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const SAFE_BOTTOM_HEIGHT = SCREEN_HEIGHT * 0.12; // 12% pour les boutons
 
 export default function OnlineSetupScreen() {
   const router = useRouter();
   const { startMultiplayerGame } = useGameStore();
+  const pulseAnim = useSharedValue(1);
+  const rotateAnim = useSharedValue(0);
+  
   const [mode, setMode] = useState<'menu' | 'create'>('menu');
   const [playerName, setPlayerName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -30,11 +50,27 @@ export default function OnlineSetupScreen() {
 
   useEffect(() => {
     loadAvailableRooms();
+    
+    // Animation de rotation pour le globe
+    rotateAnim.value = withRepeat(
+      withTiming(360, { duration: 20000 }),
+      -1,
+      false
+    );
   }, []);
 
   useEffect(() => {
     if (waitingRoom) {
-      console.log('🎮 Waiting room set:', waitingRoom);
+      // Animation pulse pour le code room
+      pulseAnim.value = withRepeat(
+        withSequence(
+          withSpring(1.05, { damping: 2 }),
+          withSpring(1, { damping: 2 })
+        ),
+        -1,
+        true
+      );
+      
       loadPlayersAndWatch();
     }
 
@@ -45,7 +81,6 @@ export default function OnlineSetupScreen() {
 
   async function loadAvailableRooms() {
     try {
-      console.log('📋 Loading available rooms...');
       const { data, error } = await supabase
         .from('game_rooms')
         .select('*')
@@ -53,12 +88,7 @@ export default function OnlineSetupScreen() {
         .order('created_at', { ascending: false })
         .limit(20);
 
-      if (error) {
-        console.error('❌ Error loading rooms:', error);
-        throw error;
-      }
-
-      console.log('✅ Rooms loaded:', data?.length || 0);
+      if (error) throw error;
 
       const roomsWithCount = await Promise.all(
         (data || []).map(async (room) => {
@@ -75,10 +105,9 @@ export default function OnlineSetupScreen() {
       );
 
       const availableRooms = roomsWithCount.filter(r => r.playerCount < r.max_players);
-      console.log('✅ Available rooms:', availableRooms.length);
       setAvailableRooms(availableRooms as any);
     } catch (error) {
-      console.error('❌ Error loading rooms:', error);
+      console.error('Error loading rooms:', error);
     }
   }
 
@@ -92,86 +121,59 @@ export default function OnlineSetupScreen() {
     if (!waitingRoom) return;
 
     try {
-      console.log('👥 Loading players for room:', waitingRoom.roomId);
       const playersList = await onlineService.getPlayers(waitingRoom.roomId);
-      console.log('✅ Players loaded:', playersList.length, playersList.map(p => p.player_name));
       setPlayers(playersList);
 
       if (playersList.length >= 2) {
-        console.log('🚀 2 players detected, starting game...');
         await handleAutoStart();
         return;
       }
 
-      console.log('⏳ Starting polling for 2nd player...');
       const interval = setInterval(async () => {
-        console.log('🔄 Polling for players...');
         const updatedPlayers = await onlineService.getPlayers(waitingRoom.roomId);
-        console.log('👥 Current players:', updatedPlayers.length);
         setPlayers(updatedPlayers);
 
         if (updatedPlayers.length >= 2) {
-          console.log('🎉 2 players found!');
           clearInterval(interval);
           await handleAutoStart();
         }
       }, 1000);
 
       return () => {
-        console.log('🛑 Stopping polling');
         clearInterval(interval);
       };
     } catch (error) {
-      console.error('❌ Error loading players:', error);
+      console.error('Error loading players:', error);
       Alert.alert('Erreur', 'Impossible de charger les joueurs');
     }
   }
 
   async function handleAutoStart() {
-    if (!waitingRoom) {
-      console.error('❌ No waiting room!');
-      return;
-    }
-
-    console.log('🎮 Auto-starting game...');
-    console.log('Room:', waitingRoom);
+    if (!waitingRoom) return;
 
     try {
-      // IMPORTANT: Recharger les joueurs dans cette fonction
-      console.log('🔄 Reloading players...');
       const currentPlayers = await onlineService.getPlayers(waitingRoom.roomId);
-      console.log('✅ Current players loaded:', currentPlayers.length, currentPlayers.map(p => p.player_name));
 
       if (currentPlayers.length < 2) {
-        console.error('❌ Not enough players:', currentPlayers.length);
         Alert.alert('Erreur', 'Pas assez de joueurs');
         return;
       }
 
       const opponent = currentPlayers.find(p => p.id !== waitingRoom.playerId);
-      console.log('👥 Opponent:', opponent?.player_name);
 
       if (!opponent) {
-        console.error('❌ No opponent found!');
         Alert.alert('Erreur', 'Adversaire introuvable');
         return;
       }
 
       if (waitingRoom.isHost) {
-        console.log('👑 I am host, starting game...');
         await onlineService.startGame(waitingRoom.roomId);
-        console.log('✅ Game started by host');
-      } else {
-        console.log('👤 I am not host, waiting...');
       }
 
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      console.log('📚 Loading categories...');
       const categories = await getCategories();
-      console.log('✅ Categories loaded:', categories.length);
 
-      console.log('🎯 Starting multiplayer game in store...');
       startMultiplayerGame(
         waitingRoom.letter,
         categories,
@@ -179,11 +181,9 @@ export default function OnlineSetupScreen() {
         opponent.player_name
       );
 
-      console.log('🎮 Navigating to game...');
       router.push('/online-game');
-      console.log('✅ Navigation complete');
     } catch (error) {
-      console.error('❌ Error starting game:', error);
+      console.error('Error starting game:', error);
       Alert.alert('Erreur', 'Impossible de démarrer la partie: ' + (error as Error).message);
     }
   }
@@ -196,7 +196,6 @@ export default function OnlineSetupScreen() {
 
     setLoading(true);
     try {
-      console.log('🏗️ Creating room for:', playerName);
       const categories = await getCategories();
       if (categories.length === 0) {
         Alert.alert('Erreur', 'Aucune catégorie disponible');
@@ -204,11 +203,7 @@ export default function OnlineSetupScreen() {
       }
 
       const randomLetter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
-      console.log('🔤 Random letter:', randomLetter);
-      
       const { room, player } = await onlineService.createRoom(playerName.trim(), randomLetter);
-      console.log('✅ Room created:', room.room_code);
-      console.log('✅ Player created:', player.player_name);
 
       setWaitingRoom({
         roomId: room.id,
@@ -218,7 +213,7 @@ export default function OnlineSetupScreen() {
         letter: randomLetter,
       });
     } catch (error) {
-      console.error('❌ Error creating room:', error);
+      console.error('Error creating room:', error);
       Alert.alert('Erreur', 'Impossible de créer la salle');
     } finally {
       setLoading(false);
@@ -233,10 +228,7 @@ export default function OnlineSetupScreen() {
 
     setLoading(true);
     try {
-      console.log('🚪 Joining room:', room.room_code, 'as', playerName);
       const { room: joinedRoom, player } = await onlineService.joinRoom(room.room_code, playerName.trim());
-      console.log('✅ Joined room:', joinedRoom.room_code);
-      console.log('✅ Player created:', player.player_name, 'ID:', player.id);
 
       const waitingRoomData = {
         roomId: joinedRoom.id,
@@ -246,10 +238,9 @@ export default function OnlineSetupScreen() {
         letter: joinedRoom.letter,
       };
 
-      console.log('💾 Setting waiting room:', waitingRoomData);
       setWaitingRoom(waitingRoomData);
     } catch (error: any) {
-      console.error('❌ Error joining room:', error);
+      console.error('Error joining room:', error);
       Alert.alert('Erreur', error.message || 'Impossible de rejoindre la salle');
     } finally {
       setLoading(false);
@@ -286,77 +277,137 @@ export default function OnlineSetupScreen() {
     }
   }
 
+  const pulseStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: pulseAnim.value }],
+    };
+  });
+
+  const rotateStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ rotate: `${rotateAnim.value}deg` }],
+    };
+  });
+
   // ÉCRAN D'ATTENTE
   if (waitingRoom) {
     return (
       <View style={styles.container}>
-        <View style={styles.header}>
-          <Globe size={48} color="#007AFF" />
-          <Text style={styles.title}>Salle d'attente</Text>
-        </View>
+        <Animated.View 
+          entering={FadeIn.duration(600)} 
+          style={styles.backgroundGradient}
+        />
 
-        <View style={styles.roomCodeCard}>
-          <Text style={styles.roomCodeLabel}>Code de la salle</Text>
-          <Text style={styles.roomCode}>{waitingRoom.roomCode}</Text>
-        </View>
+        <ScrollView 
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <Animated.View 
+            entering={FadeInDown.delay(100).springify()}
+            style={styles.headerCompact}
+          >
+            <Animated.View style={rotateStyle}>
+              <Globe size={48} color="#007AFF" />
+            </Animated.View>
+            <Text style={styles.titleCompact}>Salle d'attente</Text>
+          </Animated.View>
 
-        <View style={styles.letterCard}>
-          <Text style={styles.letterLabel}>Lettre</Text>
-          <Text style={styles.letter}>{waitingRoom.letter}</Text>
-        </View>
+          <Animated.View 
+            entering={ZoomIn.delay(200).springify()}
+            style={[styles.roomCodeCard, pulseStyle]}
+          >
+            <Text style={styles.roomCodeLabel}>Code</Text>
+            <View style={styles.codeContainer}>
+              <Text style={styles.roomCode}>{waitingRoom.roomCode}</Text>
+              <Copy size={20} color="#007AFF" />
+            </View>
+            <Text style={styles.shareHint}>Partagez ce code</Text>
+          </Animated.View>
 
-        <View style={styles.playersSection}>
-          <Text style={styles.playersTitle}>
-            Joueurs ({players.length}/2)
-          </Text>
-          {players.map((player) => (
-            <View key={player.id} style={styles.playerCard}>
-              <Users size={24} color="#007AFF" />
-              <Text style={styles.playerName}>{player.player_name}</Text>
-              {player.is_host && (
-                <View style={styles.hostBadge}>
-                  <Text style={styles.hostBadgeText}>Hôte</Text>
+          <Animated.View 
+            entering={BounceIn.delay(300)}
+            style={styles.letterCardCompact}
+          >
+            <View style={styles.letterBadgeCompact}>
+              <Zap size={24} color="#FFD700" />
+            </View>
+            <View style={styles.letterContent}>
+              <Text style={styles.letterLabelCompact}>Lettre</Text>
+              <Text style={styles.letterCompact}>{waitingRoom.letter}</Text>
+            </View>
+          </Animated.View>
+
+          <Animated.View 
+            entering={FadeInUp.delay(400)}
+            style={styles.playersSectionCompact}
+          >
+            <View style={styles.playersSectionHeader}>
+              <Users size={20} color="#fff" />
+              <Text style={styles.playersTitleCompact}>
+                Joueurs ({players.length}/2)
+              </Text>
+            </View>
+
+            {players.map((player, index) => (
+              <Animated.View
+                key={player.id}
+                entering={SlideInLeft.delay(500 + index * 100).springify()}
+                style={styles.playerCardCompact}
+              >
+                <View style={[
+                  styles.playerAvatarCompact,
+                  player.is_host && styles.hostAvatar
+                ]}>
+                  <Text style={styles.playerInitialCompact}>
+                    {player.player_name.charAt(0).toUpperCase()}
+                  </Text>
                 </View>
-              )}
-            </View>
-          ))}
+                <View style={styles.playerInfo}>
+                  <Text style={styles.playerNameCompact}>{player.player_name}</Text>
+                  {player.is_host && (
+                    <View style={styles.hostBadgeCompact}>
+                      <Crown size={10} color="#333" />
+                      <Text style={styles.hostBadgeTextCompact}>Hôte</Text>
+                    </View>
+                  )}
+                </View>
+              </Animated.View>
+            ))}
 
-          {players.length < 2 && (
-            <View style={styles.waitingCard}>
-              <ActivityIndicator size="small" color="#007AFF" />
-              <Text style={styles.waitingText}>
-                En attente d'un adversaire...
-              </Text>
-            </View>
-          )}
+            {players.length < 2 && (
+              <Animated.View 
+                entering={FadeIn.delay(600)}
+                style={styles.waitingCardCompact}
+              >
+                <ActivityIndicator size="small" color="#007AFF" />
+                <View style={styles.waitingContent}>
+                  <Text style={styles.waitingTitleCompact}>En attente...</Text>
+                  <Text style={styles.waitingTextCompact}>
+                    Un adversaire rejoindra bientôt
+                  </Text>
+                </View>
+              </Animated.View>
+            )}
 
-          {players.length >= 2 && (
-            <View style={styles.startingCard}>
-              <ActivityIndicator size="small" color="#4caf50" />
-              <Text style={styles.startingText}>
-                Lancement de la partie...
-              </Text>
-            </View>
-          )}
-        </View>
+            {players.length >= 2 && (
+              <Animated.View 
+                entering={BounceIn}
+                style={styles.startingCardCompact}
+              >
+                <Zap size={24} color="#4caf50" />
+                <Text style={styles.startingTitleCompact}>C'est parti !</Text>
+              </Animated.View>
+            )}
+          </Animated.View>
+        </ScrollView>
 
-        <View style={styles.debugInfo}>
-          <Text style={styles.debugText}>
-            Room ID: {waitingRoom.roomId.substring(0, 8)}...
-          </Text>
-          <Text style={styles.debugText}>
-            Player ID: {waitingRoom.playerId.substring(0, 8)}...
-          </Text>
-          <Text style={styles.debugText}>
-            Is Host: {waitingRoom.isHost ? 'Oui' : 'Non'}
-          </Text>
-        </View>
-
-        <View style={styles.buttonContainer}>
+        <View style={styles.fixedButtonContainer}>
           <Button
             title="Quitter"
             onPress={handleBack}
             variant="secondary"
+            icon={<ArrowLeft size={18} color="#007AFF" />}
           />
         </View>
       </View>
@@ -367,39 +418,66 @@ export default function OnlineSetupScreen() {
   if (mode === 'create') {
     return (
       <View style={styles.container}>
-        <View style={styles.header}>
-          <Globe size={48} color="#007AFF" />
-          <Text style={styles.title}>Créer une salle</Text>
-        </View>
+        <Animated.View 
+          entering={FadeIn.duration(600)} 
+          style={styles.backgroundGradient}
+        />
 
-        <View style={styles.formCard}>
-          <Text style={styles.label}>Votre nom</Text>
-          <TextInput
-            style={styles.input}
-            value={playerName}
-            onChangeText={setPlayerName}
-            placeholder="Entrez votre nom"
-            maxLength={20}
-            autoCapitalize="words"
-          />
-        </View>
+        <ScrollView 
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <Animated.View 
+            entering={FadeInDown.delay(100).springify()}
+            style={styles.headerCompact}
+          >
+            <UserPlus size={48} color="#007AFF" />
+            <Text style={styles.titleCompact}>Créer une salle</Text>
+          </Animated.View>
 
-        <View style={styles.infoCard}>
-          <Text style={styles.infoText}>
-            La partie se lancera automatiquement dès qu'un autre joueur rejoindra votre salle.
-          </Text>
-        </View>
+          <Animated.View 
+            entering={FadeInUp.delay(200).springify()}
+            style={styles.formCard}
+          >
+            <Text style={styles.label}>Votre nom</Text>
+            <TextInput
+              style={styles.input}
+              value={playerName}
+              onChangeText={setPlayerName}
+              placeholder="Entrez votre nom"
+              placeholderTextColor="rgba(255, 255, 255, 0.4)"
+              maxLength={20}
+              autoCapitalize="words"
+            />
+          </Animated.View>
 
-        <View style={styles.buttonContainer}>
+          <Animated.View 
+            entering={FadeInUp.delay(300)}
+            style={styles.infoCardCompact}
+          >
+            <Clock size={20} color="#007AFF" />
+            <View style={styles.infoContent}>
+              <Text style={styles.infoTitleCompact}>Démarrage auto</Text>
+              <Text style={styles.infoTextCompact}>
+                Partie lancée dès qu'un joueur rejoint
+              </Text>
+            </View>
+          </Animated.View>
+        </ScrollView>
+
+        <View style={styles.fixedButtonContainer}>
           <Button
-            title="Créer la salle"
+            title="Créer"
             onPress={handleCreateRoom}
             loading={loading}
+            icon={<UserPlus size={18} color="#fff" />}
           />
           <Button
             title="Retour"
             onPress={handleBack}
             variant="secondary"
+            icon={<ArrowLeft size={18} color="#007AFF" />}
           />
         </View>
       </View>
@@ -409,77 +487,114 @@ export default function OnlineSetupScreen() {
   // ÉCRAN MENU PRINCIPAL
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Globe size={48} color="#007AFF" />
-        <Text style={styles.title}>Jeu en ligne</Text>
-        <Text style={styles.subtitle}>Trouvez ou créez une salle</Text>
-      </View>
+      <Animated.View 
+        entering={FadeIn.duration(600)} 
+        style={styles.backgroundGradient}
+      />
 
-      <View style={styles.formCard}>
-        <Text style={styles.label}>Votre nom</Text>
-        <TextInput
-          style={styles.input}
-          value={playerName}
-          onChangeText={setPlayerName}
-          placeholder="Entrez votre nom"
-          maxLength={20}
-          autoCapitalize="words"
-        />
-      </View>
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View 
+          entering={FadeInDown.delay(100).springify()}
+          style={styles.headerCompact}
+        >
+          <Animated.View style={rotateStyle}>
+            <Globe size={48} color="#007AFF" />
+          </Animated.View>
+          <Text style={styles.titleCompact}>Jeu en ligne</Text>
+        </Animated.View>
 
-      <View style={styles.roomsSection}>
-        <View style={styles.roomsHeader}>
-          <Text style={styles.roomsTitle}>Salles disponibles</Text>
-          <Button
-            title=""
-            onPress={handleRefresh}
-            variant="secondary"
-            icon={<RefreshCw size={20} color="#007AFF" />}
+        <Animated.View 
+          entering={FadeInUp.delay(200).springify()}
+          style={styles.formCard}
+        >
+          <Text style={styles.label}>Votre nom</Text>
+          <TextInput
+            style={styles.input}
+            value={playerName}
+            onChangeText={setPlayerName}
+            placeholder="Entrez votre nom"
+            placeholderTextColor="rgba(255, 255, 255, 0.4)"
+            maxLength={20}
+            autoCapitalize="words"
           />
-        </View>
+        </Animated.View>
 
-        {availableRooms.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>Aucune salle disponible</Text>
-            <Text style={styles.emptySubtext}>Créez-en une nouvelle !</Text>
+        <Animated.View 
+          entering={FadeInUp.delay(300)}
+          style={styles.roomsSectionCompact}
+        >
+          <View style={styles.roomsHeader}>
+            <View style={styles.roomsHeaderLeft}>
+              <Users size={20} color="#fff" />
+              <Text style={styles.roomsTitleCompact}>Salles</Text>
+            </View>
+            <Button
+              title=""
+              onPress={handleRefresh}
+              variant="secondary"
+              icon={<RefreshCw size={18} color="#007AFF" />}
+            />
           </View>
-        ) : (
-          <FlatList
-            data={availableRooms}
-            keyExtractor={(item) => item.id}
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
-            }
-            renderItem={({ item }) => (
-              <View style={styles.roomItemCard}>
-                <View style={styles.roomInfo}>
-                  <Text style={styles.roomItemCode}>{item.room_code}</Text>
-                  <Text style={styles.roomItemHost}>Hôte: {item.host_player_name}</Text>
-                  <Text style={styles.roomItemLetter}>Lettre: {item.letter}</Text>
-                </View>
-                <Button
-                  title="Rejoindre"
-                  onPress={() => handleJoinRoom(item)}
-                  icon={<Play size={16} color="#fff" />}
-                  disabled={loading}
-                />
-              </View>
-            )}
-            style={styles.roomsList}
-          />
-        )}
-      </View>
 
-      <View style={styles.buttonContainer}>
+          {availableRooms.length === 0 ? (
+            <Animated.View 
+              entering={FadeIn.delay(400)}
+              style={styles.emptyCardCompact}
+            >
+              <Users size={36} color="rgba(255, 255, 255, 0.3)" />
+              <Text style={styles.emptyTextCompact}>Aucune salle</Text>
+              <Text style={styles.emptySubtextCompact}>Créez-en une !</Text>
+            </Animated.View>
+          ) : (
+            availableRooms.map((item, index) => (
+              <Animated.View
+                key={item.id}
+                entering={FadeInDown.delay(400 + index * 50).springify()}
+              >
+                <View style={styles.roomItemCardCompact}>
+                  <View style={styles.roomItemLeft}>
+                    <View style={styles.roomCodeBadge}>
+                      <Text style={styles.roomItemCodeCompact}>{item.room_code}</Text>
+                    </View>
+                    <View style={styles.roomDetails}>
+                      <View style={styles.roomDetailRow}>
+                        <Crown size={12} color="#FFD700" />
+                        <Text style={styles.roomItemHostCompact}>{item.host_player_name}</Text>
+                      </View>
+                      <View style={styles.roomDetailRow}>
+                        <Zap size={12} color="#007AFF" />
+                        <Text style={styles.roomItemLetterCompact}>Lettre {item.letter}</Text>
+                      </View>
+                    </View>
+                  </View>
+                  <Button
+                    title="Rejoindre"
+                    onPress={() => handleJoinRoom(item)}
+                    icon={<LogIn size={14} color="#fff" />}
+                    disabled={loading}
+                  />
+                </View>
+              </Animated.View>
+            ))
+          )}
+        </Animated.View>
+      </ScrollView>
+
+      <View style={styles.fixedButtonContainer}>
         <Button
-          title="Créer une nouvelle salle"
+          title="Créer une salle"
           onPress={() => setMode('create')}
-          icon={<UserPlus size={20} color="#fff" />}
+          icon={<UserPlus size={18} color="#fff" />}
         />
         <Button
           title="Retour"
           onPress={handleBack}
           variant="secondary"
+          icon={<ArrowLeft size={18} color="#007AFF" />}
         />
       </View>
     </View>
@@ -489,201 +604,287 @@ export default function OnlineSetupScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 20,
-    paddingTop: 60,
+    backgroundColor: '#0a0e27',
   },
-  header: {
+  backgroundGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#0a0e27',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+    paddingTop: 50,
+    paddingBottom: SAFE_BOTTOM_HEIGHT + 20,
+  },
+  headerCompact: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
   },
-  title: {
-    fontSize: 32,
-    fontWeight: '700',
-    color: '#333',
-    marginTop: 16,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#666',
-    marginTop: 8,
+  titleCompact: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#fff',
+    marginTop: 12,
+    textShadowColor: 'rgba(0, 122, 255, 0.5)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 10,
   },
   formCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   label: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: '600',
-    color: '#333',
-    marginBottom: 8,
+    color: 'rgba(255, 255, 255, 0.8)',
+    marginBottom: 10,
+    letterSpacing: 0.5,
   },
   input: {
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    padding: 16,
-    fontSize: 16,
-    color: '#333',
-  },
-  infoCard: {
-    backgroundColor: '#e3f2fd',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 12,
-    padding: 16,
-    marginBottom: 24,
+    padding: 14,
+    fontSize: 15,
+    color: '#fff',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  infoText: {
-    fontSize: 14,
-    color: '#1976d2',
-    lineHeight: 20,
-  },
-  buttonContainer: {
+  infoCardCompact: {
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 12,
-    marginTop: 'auto',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.3)',
+  },
+  infoContent: {
+    flex: 1,
+  },
+  infoTitleCompact: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+    marginBottom: 2,
+  },
+  infoTextCompact: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.7)',
+    lineHeight: 16,
+  },
+  fixedButtonContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#0a0e27',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 20,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    gap: 10,
   },
   roomCodeCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    borderRadius: 20,
+    padding: 20,
     alignItems: 'center',
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    marginBottom: 16,
+    borderWidth: 2,
+    borderColor: 'rgba(0, 122, 255, 0.3)',
+    shadowColor: '#007AFF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 8,
   },
   roomCodeLabel: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginBottom: 10,
+    fontWeight: '600',
+    letterSpacing: 1,
+  },
+  codeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     marginBottom: 8,
   },
   roomCode: {
-    fontSize: 48,
-    fontWeight: '700',
+    fontSize: 42,
+    fontWeight: '800',
     color: '#007AFF',
-    letterSpacing: 8,
+    letterSpacing: 6,
+    textShadowColor: 'rgba(0, 122, 255, 0.5)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 8,
   },
-  letterCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
+  shareHint: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontStyle: 'italic',
+  },
+  letterCardCompact: {
+    backgroundColor: 'rgba(255, 215, 0, 0.1)',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 16,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    gap: 12,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 215, 0, 0.3)',
   },
-  letterLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 8,
+  letterBadgeCompact: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255, 215, 0, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  letter: {
-    fontSize: 64,
-    fontWeight: '700',
-    color: '#007AFF',
-  },
-  playersSection: {
+  letterContent: {
     flex: 1,
-    marginBottom: 20,
   },
-  playersTitle: {
-    fontSize: 18,
+  letterLabelCompact: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginBottom: 2,
     fontWeight: '600',
-    color: '#333',
+  },
+  letterCompact: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#FFD700',
+  },
+  playersSectionCompact: {
+    marginBottom: 16,
+  },
+  playersSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     marginBottom: 12,
   },
-  playerCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  playerName: {
-    flex: 1,
+  playersTitleCompact: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
+    fontWeight: '700',
+    color: '#fff',
   },
-  hostBadge: {
-    backgroundColor: '#FFD700',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  hostBadgeText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#333',
-  },
-  waitingCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  waitingText: {
-    fontSize: 16,
-    color: '#666',
-  },
-  startingCard: {
-    backgroundColor: '#e8f5e9',
-    borderRadius: 12,
-    padding: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  startingText: {
-    fontSize: 16,
-    color: '#4caf50',
-    fontWeight: '600',
-  },
-  debugInfo: {
-    backgroundColor: '#fff3cd',
-    borderRadius: 8,
+  playerCardCompact: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 14,
     padding: 12,
-    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  debugText: {
-    fontSize: 12,
-    color: '#856404',
-    fontFamily: 'monospace',
+  playerAvatarCompact: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 122, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#007AFF',
   },
-  roomsSection: {
+  hostAvatar: {
+    backgroundColor: 'rgba(255, 215, 0, 0.2)',
+    borderColor: '#FFD700',
+  },
+  playerInitialCompact: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  playerInfo: {
     flex: 1,
-    marginBottom: 20,
+  },
+  playerNameCompact: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#fff',
+    marginBottom: 2,
+  },
+  hostBadgeCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#FFD700',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+  },
+  hostBadgeTextCompact: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#333',
+  },
+  waitingCardCompact: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    padding: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  waitingContent: {
+    flex: 1,
+  },
+  waitingTitleCompact: {
+    fontSize: 15,
+    color: '#fff',
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  waitingTextCompact: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.6)',
+  },
+  startingCardCompact: {
+    backgroundColor: 'rgba(76, 175, 80, 0.15)',
+    borderRadius: 16,
+    padding: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    borderWidth: 2,
+    borderColor: '#4caf50',
+    shadowColor: '#4caf50',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  startingTitleCompact: {
+    fontSize: 18,
+    color: '#4caf50',
+    fontWeight: '800',
+  },
+  roomsSectionCompact: {
+    marginBottom: 16,
   },
   roomsHeader: {
     flexDirection: 'row',
@@ -691,64 +892,82 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  roomsTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
+  roomsHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
-  roomsList: {
-    flex: 1,
+  roomsTitleCompact: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
   },
-  roomItemCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
+  roomItemCardCompact: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 14,
+    padding: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  roomInfo: {
+  roomItemLeft: {
     flex: 1,
+    gap: 8,
   },
-  roomItemCode: {
-    fontSize: 20,
-    fontWeight: '700',
+  roomCodeBadge: {
+    backgroundColor: 'rgba(0, 122, 255, 0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.4)',
+  },
+  roomItemCodeCompact: {
+    fontSize: 16,
+    fontWeight: '800',
     color: '#007AFF',
-    marginBottom: 4,
+    letterSpacing: 1.5,
   },
-  roomItemHost: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 2,
+  roomDetails: {
+    gap: 4,
   },
-  roomItemLetter: {
-    fontSize: 14,
-    color: '#666',
+  roomDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  emptyCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
+  roomItemHostCompact: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '600',
+  },
+  roomItemLetterCompact: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '600',
+  },
+  emptyCardCompact: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
     padding: 32,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  emptyText: {
-    fontSize: 16,
-    color: '#666',
+  emptyTextCompact: {
+    fontSize: 15,
+    color: '#fff',
+    fontWeight: '700',
+    marginTop: 12,
     marginBottom: 4,
   },
-  emptySubtext: {
-    fontSize: 14,
-    color: '#999',
+  emptySubtextCompact: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.5)',
+    textAlign: 'center',
   },
 });
