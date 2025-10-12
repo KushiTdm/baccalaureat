@@ -9,6 +9,7 @@ export interface GameRoom {
   status: 'waiting' | 'playing' | 'finished';
   max_players: number;
   current_round_number: number;
+  used_letters: string[];
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -18,8 +19,10 @@ export interface GameRoomPlayer {
   id: string;
   room_id: string;
   player_name: string;
+  user_id: string | null; 
   is_host: boolean;
   is_ready: boolean;
+  ready_for_next_round: boolean; 
   score: number;
   finished_at: string | null;
   joined_at: string;
@@ -187,6 +190,54 @@ class OnlineService {
     this.currentPlayerId = player.id;
     return { room, player };
   }
+
+  async getNextLetter(roomId: string): Promise<string> {
+    const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    
+    // Récupérer la room pour voir les lettres déjà utilisées
+    const room = await this.getRoom(roomId);
+    if (!room) throw new Error('Room introuvable');
+
+    const usedLetters = room.used_letters || [];
+    const availableLetters = LETTERS.filter(l => !usedLetters.includes(l));
+
+    // Si toutes les lettres ont été utilisées, réinitialiser
+    if (availableLetters.length === 0) {
+      console.log('🔄 Toutes les lettres utilisées, réinitialisation');
+      await supabase
+        .from('game_rooms')
+        .update({ used_letters: [] })
+        .eq('id', roomId);
+      
+      // Choisir une lettre aléatoire parmi toutes
+      return LETTERS[Math.floor(Math.random() * LETTERS.length)];
+    }
+
+    // Choisir une lettre aléatoire parmi les disponibles
+    const newLetter = availableLetters[Math.floor(Math.random() * availableLetters.length)];
+    
+    // Ajouter la lettre aux lettres utilisées
+    const updatedUsedLetters = [...usedLetters, newLetter];
+    await supabase
+      .from('game_rooms')
+      .update({ used_letters: updatedUsedLetters })
+      .eq('id', roomId);
+
+    console.log('🔤 New letter:', newLetter, '| Used:', updatedUsedLetters.length, '/', LETTERS.length);
+    
+    return newLetter;
+  }
+
+  async setPlayerReady(playerId: string, ready: boolean): Promise<void> {
+    const { error } = await supabase
+      .from('game_room_players')
+      .update({ ready_for_next_round: ready })
+      .eq('id', playerId);
+
+    if (error) {
+      throw new Error('Impossible de mettre à jour le statut ready');
+    }
+}
 
   async getPlayers(roomId: string): Promise<GameRoomPlayer[]> {
     const { data, error } = await supabase
@@ -471,18 +522,33 @@ class OnlineService {
   }
 
   async voteForWordValidation(voteId: string, playerId: string, isValid: boolean): Promise<void> {
-    const { error } = await supabase
+    console.log('🗳️ Recording vote:', voteId, 'playerId:', playerId, 'isValid:', isValid);
+    
+    const { data: before } = await supabase
+      .from('word_validation_votes')
+      .select('*')
+      .eq('id', voteId)
+      .single();
+
+    console.log('📋 Vote before update:', before);
+
+    const { data, error } = await supabase
       .from('word_validation_votes')
       .update({
         vote: isValid,
         voted_at: new Date().toISOString(),
       })
       .eq('id', voteId)
-      .eq('player_id', playerId);
+      .eq('player_id', playerId)
+      .select()
+      .single();
 
     if (error) {
-      throw new Error('Impossible d\'enregistrer le vote');
+      console.error('❌ Error recording vote:', error);
+      throw new Error('Impossible d\'enregistrer le vote: ' + error.message);
     }
+
+    console.log('✅ Vote recorded successfully:', data);
   }
 
   async getWordValidationVotes(answerId: string): Promise<WordValidationVote[]> {
@@ -499,19 +565,39 @@ class OnlineService {
   }
 
   async updateAnswerWithManualValidation(answerId: string, isValid: boolean, points: number): Promise<void> {
-    const { error } = await supabase
-      .from('game_room_answers')
-      .update({
-        manual_validation_result: isValid,
-        is_valid: isValid,
-        points: points,
-      })
-      .eq('id', answerId);
+  console.log('🔧 Updating answer:', answerId, 'isValid:', isValid, 'points:', points);
+  
+  const { data: before, error: fetchError } = await supabase
+    .from('game_room_answers')
+    .select('*')
+    .eq('id', answerId)
+    .single();
 
-    if (error) {
-      throw new Error('Impossible de mettre à jour la réponse');
-    }
+  if (fetchError) {
+    console.error('❌ Error fetching answer before update:', fetchError);
+    throw new Error('Impossible de récupérer la réponse');
   }
+
+  console.log('📋 Answer before update:', before);
+
+  const { data, error } = await supabase
+    .from('game_room_answers')
+    .update({
+      manual_validation_result: isValid,
+      is_valid: isValid,
+      points: points,
+    })
+    .eq('id', answerId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('❌ Error updating answer:', error);
+    throw new Error('Impossible de mettre à jour la réponse: ' + error.message);
+  }
+
+  console.log('✅ Answer updated successfully:', data);
+}
 
   // ===== SOUSCRIPTIONS =====
 

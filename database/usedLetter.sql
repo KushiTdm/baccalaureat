@@ -1,0 +1,2 @@
+ALTER TABLE game_rooms
+ADD COLUMN IF NOT EXISTS used_letters TEXT[] DEFAULT '{}';
