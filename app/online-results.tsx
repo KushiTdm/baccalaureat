@@ -233,11 +233,11 @@ export default function OnlineResultsScreen() {
 
     try {
       // Récupérer toutes les réponses à jour
-      const allAnswers = await onlineService.getRoundAnswers(roundId);
+      const updatedAnswers = await onlineService.getRoundAnswers(roundId);
       const players = await onlineService.getPlayers(roomId);
 
       for (const player of players) {
-        const playerAnswers = allAnswers.filter(a => a.player_id === player.id);
+        const playerAnswers = updatedAnswers.filter(a => a.player_id === player.id);
         const newScore = playerAnswers.reduce((sum, a) => sum + a.points, 0);
         const validWordsCount = playerAnswers.filter(a => a.is_valid).length;
 
@@ -259,6 +259,10 @@ export default function OnlineResultsScreen() {
       }
 
       console.log('✅ Round scores recalculated');
+      
+      // ✅ IMPORTANT: Mettre à jour l'état local avec les nouvelles réponses
+      setAllAnswers(updatedAnswers);
+      
     } catch (error) {
       console.error('Error recalculating scores:', error);
     }
