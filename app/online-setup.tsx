@@ -1,18 +1,18 @@
-// app/online-setup.tsx - VERSION AMÉLIORÉE avec animations
-import { View, Text, StyleSheet, TextInput, ScrollView, Alert, ActivityIndicator, FlatList, RefreshControl, Dimensions } from 'react-native';
+// app/online-setup.tsx - VERSION COMPLÈTE avec username automatique
+import { View, Text, StyleSheet, TextInput, ScrollView, Alert, ActivityIndicator, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import Button from '../components/Button';
 import { onlineService, GameRoom, GameRoomPlayer } from '../services/online';
 import { useGameStore } from '../store/gameStore';
+import { useUserStore } from '../store/userStore'; // ✅ AJOUTÉ
 import { getCategories } from '../services/api';
-import { Globe, UserPlus, Users, Play, RefreshCw, ArrowLeft, Copy, Clock, Zap, Crown, LogIn } from 'lucide-react-native';
+import { Globe, UserPlus, Users, Play, RefreshCw, ArrowLeft, Copy, Clock, Zap, Crown, LogIn, User } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import Animated, { 
   FadeIn, 
   FadeInDown, 
   FadeInUp, 
-  SlideInRight,
   SlideInLeft,
   BounceIn,
   ZoomIn,
@@ -26,11 +26,12 @@ import Animated, {
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const SAFE_BOTTOM_HEIGHT = SCREEN_HEIGHT * 0.12; // 12% pour les boutons
+const SAFE_BOTTOM_HEIGHT = SCREEN_HEIGHT * 0.12;
 
 export default function OnlineSetupScreen() {
   const router = useRouter();
   const { startMultiplayerGame } = useGameStore();
+  const { user } = useUserStore(); // ✅ Récupérer l'utilisateur connecté
   const pulseAnim = useSharedValue(1);
   const rotateAnim = useSharedValue(0);
   
@@ -48,10 +49,16 @@ export default function OnlineSetupScreen() {
   } | null>(null);
   const [players, setPlayers] = useState<GameRoomPlayer[]>([]);
 
+  // ✅ Initialiser le nom avec le username de l'utilisateur
+  useEffect(() => {
+    if (user?.username) {
+      setPlayerName(user.username);
+    }
+  }, [user]);
+
   useEffect(() => {
     loadAvailableRooms();
     
-    // Animation de rotation pour le globe
     rotateAnim.value = withRepeat(
       withTiming(360, { duration: 20000 }),
       -1,
@@ -61,7 +68,6 @@ export default function OnlineSetupScreen() {
 
   useEffect(() => {
     if (waitingRoom) {
-      // Animation pulse pour le code room
       pulseAnim.value = withRepeat(
         withSequence(
           withSpring(1.05, { damping: 2 }),
@@ -189,7 +195,10 @@ export default function OnlineSetupScreen() {
   }
 
   async function handleCreateRoom() {
-    if (!playerName.trim()) {
+    // ✅ Utiliser le username ou demander un nom
+    const finalName = user?.username || playerName.trim();
+    
+    if (!finalName) {
       Alert.alert('Erreur', 'Veuillez entrer votre nom');
       return;
     }
@@ -203,7 +212,7 @@ export default function OnlineSetupScreen() {
       }
 
       const randomLetter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
-      const { room, player } = await onlineService.createRoom(playerName.trim(), randomLetter);
+      const { room, player } = await onlineService.createRoom(finalName, randomLetter);
 
       setWaitingRoom({
         roomId: room.id,
@@ -221,14 +230,17 @@ export default function OnlineSetupScreen() {
   }
 
   async function handleJoinRoom(room: GameRoom) {
-    if (!playerName.trim()) {
+    // ✅ Utiliser le username ou demander un nom
+    const finalName = user?.username || playerName.trim();
+    
+    if (!finalName) {
       Alert.alert('Erreur', 'Veuillez entrer votre nom pour rejoindre');
       return;
     }
 
     setLoading(true);
     try {
-      const { room: joinedRoom, player } = await onlineService.joinRoom(room.room_code, playerName.trim());
+      const { room: joinedRoom, player } = await onlineService.joinRoom(room.room_code, finalName);
 
       const waitingRoomData = {
         roomId: joinedRoom.id,
@@ -436,21 +448,37 @@ export default function OnlineSetupScreen() {
             <Text style={styles.titleCompact}>Créer une salle</Text>
           </Animated.View>
 
-          <Animated.View 
-            entering={FadeInUp.delay(200).springify()}
-            style={styles.formCard}
-          >
-            <Text style={styles.label}>Votre nom</Text>
-            <TextInput
-              style={styles.input}
-              value={playerName}
-              onChangeText={setPlayerName}
-              placeholder="Entrez votre nom"
-              placeholderTextColor="rgba(255, 255, 255, 0.4)"
-              maxLength={20}
-              autoCapitalize="words"
-            />
-          </Animated.View>
+          {/* ✅ AFFICHER USERNAME SI EXISTE, SINON INPUT */}
+          {user?.username ? (
+            <Animated.View 
+              entering={FadeInUp.delay(200).springify()}
+              style={styles.playerInfoCard}
+            >
+              <View style={styles.playerAvatarLarge}>
+                <User size={28} color="#fff" />
+              </View>
+              <View style={styles.playerInfoContent}>
+                <Text style={styles.playerInfoLabel}>Vous jouez en tant que</Text>
+                <Text style={styles.playerInfoName}>{user.username}</Text>
+              </View>
+            </Animated.View>
+          ) : (
+            <Animated.View 
+              entering={FadeInUp.delay(200).springify()}
+              style={styles.formCard}
+            >
+              <Text style={styles.label}>Votre nom</Text>
+              <TextInput
+                style={styles.input}
+                value={playerName}
+                onChangeText={setPlayerName}
+                placeholder="Entrez votre nom"
+                placeholderTextColor="rgba(255, 255, 255, 0.4)"
+                maxLength={20}
+                autoCapitalize="words"
+              />
+            </Animated.View>
+          )}
 
           <Animated.View 
             entering={FadeInUp.delay(300)}
@@ -507,21 +535,37 @@ export default function OnlineSetupScreen() {
           <Text style={styles.titleCompact}>Jeu en ligne</Text>
         </Animated.View>
 
-        <Animated.View 
-          entering={FadeInUp.delay(200).springify()}
-          style={styles.formCard}
-        >
-          <Text style={styles.label}>Votre nom</Text>
-          <TextInput
-            style={styles.input}
-            value={playerName}
-            onChangeText={setPlayerName}
-            placeholder="Entrez votre nom"
-            placeholderTextColor="rgba(255, 255, 255, 0.4)"
-            maxLength={20}
-            autoCapitalize="words"
-          />
-        </Animated.View>
+        {/* ✅ AFFICHER USERNAME SI EXISTE, SINON INPUT */}
+        {user?.username ? (
+          <Animated.View 
+            entering={FadeInUp.delay(200).springify()}
+            style={styles.playerInfoCard}
+          >
+            <View style={styles.playerAvatarLarge}>
+              <User size={28} color="#fff" />
+            </View>
+            <View style={styles.playerInfoContent}>
+              <Text style={styles.playerInfoLabel}>Vous jouez en tant que</Text>
+              <Text style={styles.playerInfoName}>{user.username}</Text>
+            </View>
+          </Animated.View>
+        ) : (
+          <Animated.View 
+            entering={FadeInUp.delay(200).springify()}
+            style={styles.formCard}
+          >
+            <Text style={styles.label}>Votre nom</Text>
+            <TextInput
+              style={styles.input}
+              value={playerName}
+              onChangeText={setPlayerName}
+              placeholder="Entrez votre nom"
+              placeholderTextColor="rgba(255, 255, 255, 0.4)"
+              maxLength={20}
+              autoCapitalize="words"
+            />
+          </Animated.View>
+        )}
 
         <Animated.View 
           entering={FadeInUp.delay(300)}
@@ -659,6 +703,44 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)',
   },
+  // ✅ NOUVEAUX STYLES POUR L'AFFICHAGE USERNAME
+  playerInfoCard: {
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.3)',
+  },
+  playerAvatarLarge: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(0, 122, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#007AFF',
+  },
+  playerInfoContent: {
+    flex: 1,
+  },
+  playerInfoLabel: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginBottom: 4,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  playerInfoName: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  // FIN NOUVEAUX STYLES
   infoCardCompact: {
     backgroundColor: 'rgba(0, 122, 255, 0.1)',
     borderRadius: 14,
