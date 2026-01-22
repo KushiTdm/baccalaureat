@@ -16,7 +16,7 @@ export async function populateOfflineDatabase(data: DictionaryData): Promise<voi
   cachedData = data;
 }
 
-export async function getCategoriesOffline(): Promise<Array<{ id: number; nom: string }>> {
+export async function getCategoriesOffline(): Promise<any[]> {
   if (!cachedData) {
     await initOfflineDatabase();
   }

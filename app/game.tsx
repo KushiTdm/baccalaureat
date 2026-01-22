@@ -37,47 +37,54 @@ export default function GameScreen() {
     endGame();
 
     try {
-      const results: GameResult[] = [];
-      let totalScore = 0;
-
-      for (const category of categories) {
+      const validationPromises = categories.map(async (category) => {
         const answer = answers.find((a) => a.categorieId === category.id);
         const word = answer?.word || '';
 
         if (!word.trim()) {
-          results.push({
+          return {
             categorieId: category.id,
             categorieName: category.nom,
             word: '',
             isValid: false,
             points: 0,
-          });
-          continue;
+          };
         }
 
-        if (!word.toLowerCase().startsWith(currentLetter.toLowerCase())) {
-          results.push({
+        if (!currentLetter || !word.toLowerCase().startsWith(currentLetter.toLowerCase())) {
+          return {
             categorieId: category.id,
             categorieName: category.nom,
             word,
             isValid: false,
             points: 0,
-          });
-          continue;
+          };
         }
 
-        const isValid = await validateWord(word, category.id);
-        const points = isValid ? 10 : 0;
-        totalScore += points;
+        try {
+          const isValid = await validateWord(word, category.id);
+          const points = isValid ? 10 : 0;
+          return {
+            categorieId: category.id,
+            categorieName: category.nom,
+            word,
+            isValid,
+            points,
+          };
+        } catch (error) {
+          console.error(`Erreur validation pour ${category.nom}:`, error);
+          return {
+            categorieId: category.id,
+            categorieName: category.nom,
+            word,
+            isValid: false,
+            points: 0,
+          };
+        }
+      });
 
-        results.push({
-          categorieId: category.id,
-          categorieName: category.nom,
-          word,
-          isValid,
-          points,
-        });
-      }
+      const results = await Promise.all(validationPromises);
+      const totalScore = results.reduce((sum, r) => sum + r.points, 0);
 
       setResults(results);
       setScore(totalScore);

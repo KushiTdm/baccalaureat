@@ -4,8 +4,7 @@ import { Platform } from 'react-native';
 // Import conditionnel de FileSystem (uniquement sur mobile)
 let FileSystem: any = null;
 if (Platform.OS !== 'web') {
-  // ✅ Utiliser l'API legacy pour éviter l'erreur de dépréciation
-  FileSystem = require('expo-file-system/legacy');
+  FileSystem = require('expo-file-system');
 }
 
 const DICTIONARY_FILE_PATH = FileSystem 

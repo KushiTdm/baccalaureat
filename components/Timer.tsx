@@ -14,16 +14,18 @@ export default function Timer({ onTimeUp }: TimerProps) {
     if (!isPlaying) return;
 
     const interval = setInterval(() => {
-      setTimeRemaining(timeRemaining - 1);
-
-      if (timeRemaining <= 1) {
-        clearInterval(interval);
-        onTimeUp();
-      }
+      setTimeRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          onTimeUp();
+          return 0;
+        }
+        return prev - 1;
+      });
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [timeRemaining, isPlaying, onTimeUp, setTimeRemaining]);
+  }, [isPlaying, onTimeUp, setTimeRemaining]);
 
   const minutes = Math.floor(timeRemaining / 60);
   const seconds = timeRemaining % 60;

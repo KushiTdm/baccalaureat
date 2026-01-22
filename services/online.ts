@@ -611,43 +611,43 @@ class OnlineService {
     this.subscription = supabase
       .channel(`room:${roomId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'game_room_players', filter: `room_id=eq.${roomId}` },
-        (payload) => callbacks.onPlayerJoined(payload.new as GameRoomPlayer))
+        (payload: any) => callbacks.onPlayerJoined(payload.new as GameRoomPlayer))
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'game_room_players', filter: `room_id=eq.${roomId}` },
-        (payload) => callbacks.onPlayerLeft((payload.old as GameRoomPlayer).id))
+        (payload: any) => callbacks.onPlayerLeft((payload.old as GameRoomPlayer).id))
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_rooms', filter: `id=eq.${roomId}` },
-        (payload) => {
+        (payload: any) => {
           const room = payload.new as GameRoom;
           if (room.status === 'playing') callbacks.onGameStarted();
         })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_room_players', filter: `room_id=eq.${roomId}` },
-        (payload) => {
+        (payload: any) => {
           const player = payload.new as GameRoomPlayer;
           if (player.finished_at) callbacks.onPlayerFinished(player);
         });
 
     if (callbacks.onAnswerSubmitted) {
       this.subscription.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'game_room_answers', filter: `room_id=eq.${roomId}` },
-        (payload) => callbacks.onAnswerSubmitted!(payload.new as GameRoomAnswer));
+        (payload: any) => callbacks.onAnswerSubmitted!(payload.new as GameRoomAnswer));
     }
 
     if (callbacks.onEndGameRequestReceived) {
       this.subscription.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'end_game_requests', filter: `room_id=eq.${roomId}` },
-        (payload) => callbacks.onEndGameRequestReceived!(payload.new as EndGameRequest));
+        (payload: any) => callbacks.onEndGameRequestReceived!(payload.new as EndGameRequest));
     }
 
     if (callbacks.onEndGameRequestResponded) {
       this.subscription.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'end_game_requests', filter: `room_id=eq.${roomId}` },
-        (payload) => callbacks.onEndGameRequestResponded!(payload.new as EndGameRequest));
+        (payload: any) => callbacks.onEndGameRequestResponded!(payload.new as EndGameRequest));
     }
 
     if (callbacks.onWordValidationVoted) {
       this.subscription.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'word_validation_votes', filter: `room_id=eq.${roomId}` },
-        (payload) => callbacks.onWordValidationVoted!(payload.new as WordValidationVote));
+        (payload: any) => callbacks.onWordValidationVoted!(payload.new as WordValidationVote));
     }
 
     if (callbacks.onRoundFinished) {
       this.subscription.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_rounds', filter: `room_id=eq.${roomId}` },
-        (payload) => {
+        (payload: any) => {
           const round = payload.new as GameRound;
           if (round.status === 'finished') callbacks.onRoundFinished!(round);
         });

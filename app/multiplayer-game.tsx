@@ -73,7 +73,7 @@ export default function MultiplayerGameScreen() {
           continue;
         }
 
-        if (!word.toLowerCase().startsWith(currentLetter.toLowerCase())) {
+        if (!currentLetter || !word.toLowerCase().startsWith(currentLetter.toLowerCase())) {
           myResults.push({
             categorieId: category.id,
             categorieName: category.nom,

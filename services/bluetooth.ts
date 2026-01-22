@@ -143,7 +143,8 @@ class BluetoothService {
     }
 
     const jsonString = JSON.stringify(message);
-    const base64Data = Buffer.from(jsonString).toString('base64');
+    // Utiliser btoa pour l'encodage base64 (disponible dans l'environnement JS de React Native)
+    const base64Data = btoa(jsonString);
 
     try {
       await this.connectedDevice.writeCharacteristicWithResponseForService(
@@ -171,7 +172,8 @@ class BluetoothService {
 
         if (characteristic?.value) {
           try {
-            const jsonString = Buffer.from(characteristic.value, 'base64').toString();
+            // Utiliser atob pour le décodage base64
+            const jsonString = atob(characteristic.value);
             const message: GameMessage = JSON.parse(jsonString);
             
             if (this.onMessageReceived) {

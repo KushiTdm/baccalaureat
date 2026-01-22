@@ -160,7 +160,7 @@ export default function OnlineResultsScreen() {
 
     const existingVotes = await onlineService.getWordValidationVotes(answer.id);
     
-    if (existingVotes.length === 0) {
+    if (existingVotes.length === 0 && roomId && roundId) {
       await onlineService.createWordValidationVote(
         roomId,
         roundId,
@@ -189,7 +189,7 @@ export default function OnlineResultsScreen() {
       const votes = await onlineService.getWordValidationVotes(contestedWord.id);
       const myVoteRecord = votes.find(v => v.player_id === currentPlayerId);
       
-      if (myVoteRecord) {
+      if (myVoteRecord && currentPlayerId) {
         await onlineService.voteForWordValidation(myVoteRecord.id, currentPlayerId, isValid);
         Alert.alert('Vote enregistré', 'En attente du vote de votre adversaire...');
 
@@ -233,6 +233,8 @@ export default function OnlineResultsScreen() {
 
     try {
       const updatedAnswers = await onlineService.getRoundAnswers(roundId);
+      if (!roomId) return;
+      if (!roomId) return;
       const players = await onlineService.getPlayers(roomId);
 
       for (const player of players) {
@@ -290,7 +292,9 @@ export default function OnlineResultsScreen() {
       startNewRound(newRound.letter);
 
       const cats = await getCategories();
-      startMultiplayerGame(newRound.letter, cats, isHost, opponent.player_name);
+      if (opponent) {
+        startMultiplayerGame(newRound.letter, cats, isHost, opponent.player_name);
+      }
 
       router.replace('/online-game');
     } catch (error) {
@@ -307,7 +311,8 @@ export default function OnlineResultsScreen() {
 
       const checkInterval = setInterval(async () => {
         checksCount++;
-        const players = await onlineService.getPlayers(roomId);
+        if (!roomId) return;
+      const players = await onlineService.getPlayers(roomId);
         const allReady = players.every(p => p.ready_for_next_round === true);
 
         if (allReady) {
@@ -328,7 +333,8 @@ export default function OnlineResultsScreen() {
 
       const checkInterval = setInterval(async () => {
         checksCount++;
-        const newRound = await onlineService.getCurrentRound(roomId);
+        if (!roomId) return;
+      const newRound = await onlineService.getCurrentRound(roomId);
         
         if (newRound && newRound.round_number === currentRound + 1) {
           clearInterval(checkInterval);

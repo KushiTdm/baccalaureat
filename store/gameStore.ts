@@ -63,7 +63,7 @@ type GameState = {
   setOpponentResults: (results: GameResult[], score: number) => void;
   endGame: () => void;
   resetGame: () => void;
-  setTimeRemaining: (time: number) => void;
+  setTimeRemaining: (time: number | ((prev: number) => number)) => void;
   
   // Round system actions
   startNewRound: (letter: string) => void;
@@ -213,7 +213,10 @@ export const useGameStore = create<GameState>((set) => ({
       endGameRequestReceived: false,
     }),
 
-  setTimeRemaining: (time) => set({ timeRemaining: time }),
+  setTimeRemaining: (timeOrFn) => 
+    set((state) => ({ 
+      timeRemaining: typeof timeOrFn === 'function' ? timeOrFn(state.timeRemaining) : timeOrFn 
+    })),
 
   // Round system actions
   startNewRound: (letter) =>

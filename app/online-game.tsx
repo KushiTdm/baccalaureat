@@ -304,7 +304,7 @@ export default function OnlineGameScreen() {
         let points = 0;
 
         if (word) {
-          if (word.toLowerCase().startsWith(currentLetter.toLowerCase())) {
+          if (currentLetter && word.toLowerCase().startsWith(currentLetter.toLowerCase())) {
             try {
               isValid = await validateWord(word, category.id);
               
