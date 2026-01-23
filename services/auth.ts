@@ -103,10 +103,12 @@ class AuthService {
       throw new Error('Impossible de vérifier le compte');
     }
 
-    // existingUsers est un array, prendre le premier
-    const existingUser = existingUsers && existingUsers.length > 0 ? existingUsers[0] : null;
+    // existingUsers peut être un array ou un objet selon la version de PostgREST
+    const existingUser = Array.isArray(existingUsers) 
+      ? (existingUsers.length > 0 ? existingUsers[0] : null)
+      : existingUsers;
 
-    if (existingUser) {
+    if (existingUser && existingUser.id) {
       console.log('✅ Utilisateur existant trouvé:', existingUser.username || 'Sans pseudo');
       await this.saveUserLocally(existingUser);
       return existingUser;
@@ -125,9 +127,11 @@ class AuthService {
       throw new Error(createError.message || 'Impossible de créer le compte');
     }
 
-    const newUser = newUsers && newUsers.length > 0 ? newUsers[0] : null;
+    const newUser = Array.isArray(newUsers)
+      ? (newUsers.length > 0 ? newUsers[0] : null)
+      : newUsers;
 
-    if (!newUser) {
+    if (!newUser || !newUser.id) {
       throw new Error('Aucun utilisateur retourné après création');
     }
 

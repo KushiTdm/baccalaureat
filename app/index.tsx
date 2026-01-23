@@ -152,9 +152,13 @@ export default function HomeScreen() {
 
       // 2. Vérifier le statut
       await checkStatus();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erreur initialisation:', error);
-      Alert.alert('Erreur', 'Impossible de se connecter');
+      const errorMessage = error?.message || 'Erreur inconnue';
+      Alert.alert(
+        'Erreur de connexion', 
+        `Impossible de se connecter au serveur.\n\nDétails: ${errorMessage}\n\nVérifiez votre connexion internet.`
+      );
     } finally {
       setInitializing(false);
     }
