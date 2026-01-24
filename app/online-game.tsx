@@ -77,13 +77,10 @@ export default function OnlineGameScreen() {
       true
     );
 
-    startPolling();
-    startRequestPolling();
     initializeRound();
+    setupRealtime();
 
     return () => {
-      stopPolling();
-      stopRequestPolling();
       onlineService.unsubscribeFromRoom();
     };
   }, []);
@@ -105,101 +102,81 @@ export default function OnlineGameScreen() {
     }
   }
 
-  function startPolling() {
-    pollingIntervalRef.current = setInterval(async () => {
-      await checkOpponentStatus();
-    }, 500);
-  }
+  function setupRealtime() {
+    if (!roomId) return;
 
-  function stopPolling() {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-  }
+    onlineService.subscribeToRoom(roomId, {
+      onPlayerJoined: () => {},
+      onPlayerLeft: () => {},
+      onGameStarted: () => {},
+      onPlayerFinished: (player) => {
+        if (player.id !== playerId && !hasSubmitted && !submitting) {
+          console.log('🛑 Opponent finished! Triggering auto-submit.');
+          setOpponentFinished(true);
+          
+          // Animation de shake
+          shakeAnim.value = withSequence(
+            withTiming(10, { duration: 100 }),
+            withTiming(-10, { duration: 100 }),
+            withTiming(10, { duration: 100 }),
+            withTiming(0, { duration: 100 })
+          );
 
-  function startRequestPolling() {
-    requestCheckIntervalRef.current = setInterval(async () => {
-      await checkEndGameRequests();
-    }, 2000);
-  }
-
-  function stopRequestPolling() {
-    if (requestCheckIntervalRef.current) {
-      clearInterval(requestCheckIntervalRef.current);
-      requestCheckIntervalRef.current = null;
-    }
-  }
-
-  async function checkEndGameRequests() {
-    if (hasSubmitted || endGameRequestPending) return;
-    if (!roomId || !playerId || !roundId) return;
-
-    try {
-      const request = await onlineService.getPendingEndGameRequest(roomId, roundId);
-
-      if (request && request.requester_player_id !== playerId && !receivedEndGameRequest) {
-        setReceivedEndGameRequest(request);
-        stopRequestPolling();
-
-        Alert.alert(
-          'Demande de fin',
-          `${opponentName} demande à arrêter la manche. Acceptez-vous ?`,
-          [
-            {
-              text: 'Refuser',
-              style: 'cancel',
-              onPress: async () => {
-                await onlineService.respondToEndGameRequest(request.id, false);
-                setReceivedEndGameRequest(null);
-                startRequestPolling();
+          setTimeout(async () => {
+            await handleSubmit(false);
+          }, 500);
+        }
+      },
+      onEndGameRequestReceived: (request) => {
+        if (request.requester_player_id !== playerId && !hasSubmitted && !submitting) {
+          setReceivedEndGameRequest(request);
+          Alert.alert(
+            'Demande de fin',
+            `${opponentName} demande à arrêter la manche. Acceptez-vous ?`,
+            [
+              {
+                text: 'Refuser',
+                style: 'cancel',
+                onPress: async () => {
+                  await onlineService.respondToEndGameRequest(request.id, false);
+                  setReceivedEndGameRequest(null);
+                },
               },
-            },
-            {
-              text: 'Accepter',
-              onPress: async () => {
-                await onlineService.respondToEndGameRequest(request.id, true);
-                setReceivedEndGameRequest(null);
-                await handleSubmit(false);
+              {
+                text: 'Accepter',
+                onPress: async () => {
+                  await onlineService.respondToEndGameRequest(request.id, true);
+                  setReceivedEndGameRequest(null);
+                  await handleSubmit(false);
+                },
               },
-            },
-          ],
-          { cancelable: false }
-        );
+            ],
+            { cancelable: false }
+          );
+        }
+      },
+      onEndGameRequestResponded: (request) => {
+        if (request.requester_player_id === playerId && request.status === 'accepted') {
+          setEndGameRequestPending(false);
+          Alert.alert('Accepté', 'Votre adversaire a accepté. La manche se termine.');
+          handleSubmit(false);
+        } else if (request.requester_player_id === playerId && request.status === 'rejected') {
+          setEndGameRequestPending(false);
+          setEndGameRequested(false);
+          Alert.alert('Refusé', 'Votre adversaire a refusé.');
+        }
+      },
+      onRoundFinished: (round) => {
+        if (round.id === roundId && !hasSubmitted && !submitting) {
+          handleSubmit(false);
+        }
       }
-    } catch (error) {
-      console.error('Error checking requests:', error);
-    }
+    });
   }
 
-  async function checkOpponentStatus() {
-    if (hasSubmitted || !roomId || !playerId || !roundId) return;
 
-    try {
-      const scores = await onlineService.getRoundScores(roundId);
-      const opponentScore = scores.find(s => s.player_id !== playerId);
 
-      if (opponentScore && opponentScore.finished_at && !submitting) {
-        stopPolling();
-        stopRequestPolling();
-        setOpponentFinished(true);
 
-        // Animation de shake
-        shakeAnim.value = withSequence(
-          withTiming(10, { duration: 100 }),
-          withTiming(-10, { duration: 100 }),
-          withTiming(10, { duration: 100 }),
-          withTiming(0, { duration: 100 })
-        );
-
-        setTimeout(async () => {
-          await handleAutoSubmit();
-        }, 1000);
-      }
-    } catch (error) {
-      console.error('Error checking opponent:', error);
-    }
-  }
 
   if (!currentLetter || categories.length === 0) {
     router.replace('/');
@@ -229,35 +206,7 @@ export default function OnlineGameScreen() {
 
             try {
               await onlineService.requestEndGame(roomId, roundId, playerId);
-              
-              let responseReceived = false;
-              const checkResponse = setInterval(async () => {
-                const request = await onlineService.getPendingEndGameRequest(roomId, roundId);
-                
-                if (request && request.requester_player_id === playerId && request.status !== 'pending') {
-                  clearInterval(checkResponse);
-                  setEndGameRequestPending(false);
-                  responseReceived = true;
-                  
-                  if (request.status === 'accepted') {
-                    Alert.alert('Accepté', 'Votre adversaire a accepté. La manche se termine.');
-                    await handleSubmit(false);
-                  } else {
-                    Alert.alert('Refusé', 'Votre adversaire a refusé.');
-                    setEndGameRequested(false);
-                  }
-                }
-              }, 1000);
-
-              setTimeout(() => {
-                if (!responseReceived) {
-                  clearInterval(checkResponse);
-                  Alert.alert('Délai expiré', 'Pas de réponse de votre adversaire.');
-                  setEndGameRequestPending(false);
-                  setEndGameRequested(false);
-                }
-              }, 30000);
-
+              // La réponse sera gérée par setupRealtime (onEndGameRequestResponded)
             } catch (error) {
               Alert.alert('Erreur', 'Impossible d\'envoyer la demande');
               setEndGameRequestPending(false);
@@ -278,8 +227,6 @@ export default function OnlineGameScreen() {
 
     setSubmitting(true);
     setHasSubmitted(true);
-    stopPolling();
-    stopRequestPolling();
     endGame();
 
     if (!roomId || !playerId || !roundId) {
@@ -494,6 +441,7 @@ export default function OnlineGameScreen() {
               entering={FadeInDown.delay(600 + index * 50).springify()}
             >
               <InputWord
+                index={index}
                 category={category.nom}
                 value={answer?.word || ''}
                 onChangeText={(text) => setAnswer(category.id, text)}
@@ -595,17 +543,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#0a0e27',
   },
   header: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     paddingTop: 60,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
+    paddingBottom: 24,
+    paddingHorizontal: 24,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'rgba(255, 255, 255, 0.15)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 10,
   },
   headerTop: {
     flexDirection: 'row',

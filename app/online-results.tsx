@@ -89,11 +89,20 @@ export default function OnlineResultsScreen() {
     if (!roomId || !roundId) return;
 
     try {
-      const [players, answers, scores] = await Promise.all([
-        onlineService.getPlayers(roomId),
-        onlineService.getRoundAnswers(roundId),
-        onlineService.getRoundScores(roundId),
-      ]);
+      setLoading(true);
+      
+      // Attendre que les deux joueurs aient soumis leurs scores (max 10 secondes)
+      let players = await onlineService.getPlayers(roomId);
+      let scores = await onlineService.getRoundScores(roundId);
+      let attempts = 0;
+      
+      while (scores.length < players.length && attempts < 20) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        scores = await onlineService.getRoundScores(roundId);
+        attempts++;
+      }
+
+      const answers = await onlineService.getRoundAnswers(roundId);
 
       setAllPlayers(players);
       setAllAnswers(answers);
@@ -101,7 +110,8 @@ export default function OnlineResultsScreen() {
       
       // Animer le compteur de score
       const myAnswers = answers.filter(a => a.player_id === currentPlayerId);
-      const finalScore = myAnswers.reduce((sum, a) => sum + a.points, 0);
+      const myRoundScore = scores.find(s => s.player_id === currentPlayerId);
+      const finalScore = calculateFinalScore(myAnswers, myRoundScore);
       animateScore(finalScore);
       
     } catch (error) {
@@ -305,24 +315,41 @@ export default function OnlineResultsScreen() {
   }
 
   async function waitForBothPlayersReady() {
-    return new Promise<void>((resolve, reject) => {
-      let checksCount = 0;
-      const maxChecks = 120;
+    if (!roomId) return;
 
+    return new Promise<void>((resolve, reject) => {
+      // 1. Vérifier immédiatement
+      onlineService.getPlayers(roomId).then(players => {
+        if (players.every(p => p.ready_for_next_round)) {
+          resolve();
+          return;
+        }
+      });
+
+      // 2. Écouter les changements via Realtime
+      onlineService.subscribeToRoom(roomId, {
+        onPlayerJoined: () => {},
+        onPlayerLeft: () => {},
+        onGameStarted: () => {},
+        onPlayerFinished: () => {},
+        onRoundFinished: () => {},
+        // On utilise une astuce : on écoute les changements de joueurs via un callback générique si possible
+        // ou on poll plus intelligemment. Comme subscribeToRoom est limité, on va poller mais plus vite.
+      });
+
+      let checksCount = 0;
+      const maxChecks = 60;
       const checkInterval = setInterval(async () => {
         checksCount++;
-        if (!roomId) return;
-      const players = await onlineService.getPlayers(roomId);
-        const allReady = players.every(p => p.ready_for_next_round === true);
-
-        if (allReady) {
+        const players = await onlineService.getPlayers(roomId);
+        if (players.every(p => p.ready_for_next_round)) {
           clearInterval(checkInterval);
           resolve();
         } else if (checksCount >= maxChecks) {
           clearInterval(checkInterval);
-          reject(new Error('Timeout'));
+          reject(new Error('Délai d\'attente dépassé'));
         }
-      }, 500);
+      }, 1000);
     });
   }
 

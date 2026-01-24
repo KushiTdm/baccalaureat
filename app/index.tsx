@@ -456,7 +456,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0e27',
+    backgroundColor: '#050816',
   },
   backgroundGradient: {
     position: 'absolute',
@@ -464,7 +464,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#0a0e27',
+    backgroundColor: '#050816',
   },
   particle: {
     position: 'absolute',
@@ -509,14 +509,14 @@ const styles = StyleSheet.create({
     opacity: 0.3,
   },
   title: {
-    fontSize: 52,
+    fontSize: 56,
     fontWeight: '900',
     color: '#fff',
     marginBottom: 8,
-    textShadowColor: 'rgba(0, 122, 255, 0.8)',
-    textShadowOffset: { width: 0, height: 4 },
-    textShadowRadius: 20,
-    letterSpacing: 2,
+    textShadowColor: 'rgba(59, 130, 246, 0.5)',
+    textShadowOffset: { width: 0, height: 8 },
+    textShadowRadius: 30,
+    letterSpacing: -1,
   },
   subtitle: {
     fontSize: 18,

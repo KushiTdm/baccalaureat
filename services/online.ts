@@ -332,7 +332,8 @@ class OnlineService {
     stoppedEarly: boolean,
     penaltyApplied: boolean
   ): Promise<void> {
-    const { error } = await supabase
+    // 1. Insérer le score de la manche
+    const { error: scoreError } = await supabase
       .from('game_round_scores')
       .insert({
         round_id: roundId,
@@ -344,9 +345,18 @@ class OnlineService {
         finished_at: new Date().toISOString(),
       });
 
-    if (error) {
+    if (scoreError) {
       throw new Error('Impossible de soumettre le score de manche');
     }
+
+    // 2. Mettre à jour le statut du joueur pour notifier l'adversaire via Realtime
+    await supabase
+      .from('game_room_players')
+      .update({ 
+        finished_at: new Date().toISOString(),
+        score: roundScore // Optionnel, mais utile pour le suivi
+      })
+      .eq('id', playerId);
   }
 
   async getRoundScores(roundId: string): Promise<GameRoundScore[]> {
