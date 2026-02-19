@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 
 // Types exportés
 export type GameMessage = {
-  type: 'GAME_START' | 'ANSWER_SUBMIT' | 'GAME_END' | 'SYNC_DATA';
+  type: 'GAME_START' | 'STOP_GAME' | 'ANSWER_SUBMIT' | 'GAME_END' | 'SYNC_DATA' | 'FINISH_GAME' | 'NEXT_ROUND';
   data: any;
 };
 
