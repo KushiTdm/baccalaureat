@@ -1,5 +1,7 @@
-import { View, Text, TextInput, StyleSheet } from 'react-native';
+import { Text, TextInput, StyleSheet } from 'react-native';
+import { CheckCircle2, XCircle } from 'lucide-react-native';
 import Animated, { FadeInRight, useAnimatedStyle, withSpring, useSharedValue } from 'react-native-reanimated';
+import { colors, radius, spacing } from '../constants/theme';
 
 type InputWordProps = {
   category: string;
@@ -7,45 +9,63 @@ type InputWordProps = {
   onChangeText: (text: string) => void;
   letter: string;
   index?: number;
+  editable?: boolean;
 };
 
-export default function InputWord({ category, value, onChangeText, letter, index = 0 }: InputWordProps) {
-  const isCorrect = value.trim() !== '' && value.toLowerCase().startsWith(letter.toLowerCase());
+export default function InputWord({ category, value, onChangeText, letter, index = 0, editable = true }: InputWordProps) {
+  const hasValue = value.trim() !== '';
+  const isCorrect = hasValue && value.toLowerCase().startsWith(letter.toLowerCase());
   const scale = useSharedValue(1);
+  const focused = useSharedValue(0);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
-    borderColor: isCorrect ? '#4caf50' : value.trim() !== '' ? '#f44336' : '#e0e0e0',
+    borderColor: isCorrect
+      ? colors.successBorder
+      : hasValue
+        ? colors.dangerBorder
+        : focused.value
+          ? colors.primaryBorder
+          : colors.border,
   }));
 
   const handleFocus = () => {
     scale.value = withSpring(1.02);
+    focused.value = 1;
   };
 
   const handleBlur = () => {
     scale.value = withSpring(1);
+    focused.value = 0;
   };
 
   return (
-    <Animated.View 
-      entering={FadeInRight.delay(index * 100).duration(400)}
+    <Animated.View
+      entering={FadeInRight.delay(index * 80).duration(350)}
       style={styles.container}
     >
       <Text style={styles.category}>{category}</Text>
-      <Animated.View style={[styles.inputContainer, animatedStyle]}>
+      <Animated.View style={[styles.inputContainer, animatedStyle, !editable && styles.inputDisabled]}>
         <TextInput
           style={styles.input}
           value={value}
           onChangeText={onChangeText}
           onFocus={handleFocus}
           onBlur={handleBlur}
+          editable={editable}
           placeholder={`Mot commençant par ${letter.toUpperCase()}`}
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.textMuted}
           autoCapitalize="none"
           autoCorrect={false}
+          returnKeyType="next"
+          blurOnSubmit={false}
         />
-        {value.trim() !== '' && (
-          <View style={[styles.indicator, { backgroundColor: isCorrect ? '#4caf50' : '#f44336' }]} />
+        {hasValue && (
+          isCorrect ? (
+            <CheckCircle2 size={20} color={colors.success} style={styles.indicator} />
+          ) : (
+            <XCircle size={20} color={colors.danger} style={styles.indicator} />
+          )
         )}
       </Animated.View>
     </Animated.View>
@@ -54,41 +74,36 @@ export default function InputWord({ category, value, onChangeText, letter, index
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 20,
+    marginBottom: spacing.lg,
   },
   category: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
-    color: '#666',
-    marginBottom: 8,
+    color: colors.textSecondary,
+    marginBottom: spacing.sm,
     textTransform: 'uppercase',
     letterSpacing: 1,
-    marginLeft: 4,
+    marginLeft: spacing.xs,
   },
   inputContainer: {
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderRadius: 16,
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderRadius: radius.md,
     flexDirection: 'row',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+  },
+  inputDisabled: {
+    opacity: 0.55,
   },
   input: {
     flex: 1,
     paddingVertical: 14,
-    paddingHorizontal: 16,
+    paddingHorizontal: spacing.lg,
     fontSize: 17,
-    color: '#333',
+    color: colors.text,
     fontWeight: '500',
   },
   indicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 16,
-  }
+    marginRight: spacing.lg,
+  },
 });

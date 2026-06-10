@@ -1,16 +1,24 @@
 //app/results.tsx
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useEffect } from 'react';
+import Animated, { FadeInDown, FadeInUp, BounceIn } from 'react-native-reanimated';
 import { useGameStore } from '../store/gameStore';
 import Button from '../components/Button';
-import { CheckCircle, XCircle, Trophy } from 'lucide-react-native';
+import { CheckCircle, XCircle, Trophy, RotateCcw } from 'lucide-react-native';
+import { colors, radius, spacing, shadow } from '../constants/theme';
 
 export default function ResultsScreen() {
   const router = useRouter();
   const { results, score, resetGame } = useGameStore();
 
+  useEffect(() => {
+    if (!results) {
+      router.replace('/');
+    }
+  }, [results, router]);
+
   if (!results) {
-    router.replace('/');
     return null;
   }
 
@@ -28,27 +36,40 @@ export default function ResultsScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.header}>
-          <Trophy size={64} color="#FFD700" />
+        <Animated.View entering={BounceIn.duration(600)} style={styles.header}>
+          <View style={styles.trophyCircle}>
+            <Trophy size={48} color={colors.gold} />
+          </View>
           <Text style={styles.title}>Résultats</Text>
           <View style={styles.scoreContainer}>
             <Text style={styles.scoreLabel}>Score</Text>
-            <Text style={styles.score}>{score} points</Text>
+            <Text style={styles.score}>{score}</Text>
+            <Text style={styles.scoreUnit}>points</Text>
           </View>
-          <Text style={styles.stats}>
-            {validAnswers} / {totalAnswers} réponses valides
-          </Text>
-        </View>
+          <View style={styles.statsBadge}>
+            <CheckCircle size={16} color={colors.success} />
+            <Text style={styles.stats}>
+              {validAnswers} / {totalAnswers} réponses valides
+            </Text>
+          </View>
+        </Animated.View>
 
         <View style={styles.resultsContainer}>
           {results.map((result, index) => (
-            <View key={index} style={styles.resultCard}>
+            <Animated.View
+              key={index}
+              entering={FadeInDown.delay(200 + index * 60).springify()}
+              style={[
+                styles.resultCard,
+                result.isValid ? styles.resultCardValid : result.word ? styles.resultCardInvalid : null,
+              ]}
+            >
               <View style={styles.resultHeader}>
                 <Text style={styles.category}>{result.categorieName}</Text>
                 {result.isValid ? (
-                  <CheckCircle size={24} color="#4caf50" />
+                  <CheckCircle size={22} color={colors.success} />
                 ) : (
-                  <XCircle size={24} color="#f44336" />
+                  <XCircle size={22} color={result.word ? colors.danger : colors.textMuted} />
                 )}
               </View>
 
@@ -61,19 +82,23 @@ export default function ResultsScreen() {
                       result.isValid ? styles.validPoints : styles.invalidPoints,
                     ]}
                   >
-                    {result.points} pts
+                    {result.isValid ? `+${result.points}` : '0'} pts
                   </Text>
                 </View>
               ) : (
                 <Text style={styles.noAnswer}>Pas de réponse</Text>
               )}
-            </View>
+            </Animated.View>
           ))}
         </View>
 
-        <View style={styles.buttonContainer}>
-          <Button title="Nouvelle partie" onPress={handlePlayAgain} />
-        </View>
+        <Animated.View entering={FadeInUp.delay(400)} style={styles.buttonContainer}>
+          <Button
+            title="Nouvelle partie"
+            onPress={handlePlayAgain}
+            icon={<RotateCcw size={20} color="#fff" />}
+          />
+        </Animated.View>
       </ScrollView>
     </View>
   );
@@ -82,71 +107,110 @@ export default function ResultsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.bg,
   },
   scrollContent: {
-    padding: 20,
+    padding: spacing.xl,
     paddingTop: 60,
     paddingBottom: 40,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: spacing.xxl,
+  },
+  trophyCircle: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: colors.goldSoft,
+    borderWidth: 2,
+    borderColor: colors.goldBorder,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+    ...shadow.glow(colors.gold),
   },
   title: {
-    fontSize: 36,
-    fontWeight: '700',
-    color: '#333',
-    marginTop: 16,
-    marginBottom: 20,
+    fontSize: 34,
+    fontWeight: '800',
+    color: colors.text,
+    marginBottom: spacing.xl,
   },
   scoreContainer: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    borderRadius: 16,
-    marginBottom: 12,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.primaryBorder,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: 44,
+    borderRadius: radius.lg,
+    marginBottom: spacing.md,
+    alignItems: 'center',
+    ...shadow.card,
   },
   scoreLabel: {
-    fontSize: 14,
-    color: '#fff',
-    textAlign: 'center',
-    opacity: 0.9,
+    fontSize: 13,
+    color: colors.textSecondary,
+    fontWeight: '600',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
   score: {
-    fontSize: 42,
-    fontWeight: '700',
-    color: '#fff',
-    textAlign: 'center',
+    fontSize: 56,
+    fontWeight: '800',
+    color: colors.primary,
+    lineHeight: 64,
+  },
+  scoreUnit: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  statsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.successSoft,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.successBorder,
   },
   stats: {
-    fontSize: 16,
-    color: '#666',
+    fontSize: 14,
+    color: colors.textSecondary,
+    fontWeight: '600',
   },
   resultsContainer: {
-    gap: 12,
-    marginBottom: 32,
+    gap: spacing.md,
+    marginBottom: spacing.xxl,
   },
   resultCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  resultCardValid: {
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successSoft,
+  },
+  resultCardInvalid: {
+    borderColor: colors.dangerBorder,
   },
   resultHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: spacing.sm,
   },
   category: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   answerContainer: {
     flexDirection: 'row',
@@ -155,25 +219,25 @@ const styles = StyleSheet.create({
   },
   word: {
     fontSize: 18,
-    color: '#666',
-    fontWeight: '500',
-  },
-  points: {
-    fontSize: 16,
+    color: colors.text,
     fontWeight: '600',
   },
+  points: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
   validPoints: {
-    color: '#4caf50',
+    color: colors.success,
   },
   invalidPoints: {
-    color: '#f44336',
+    color: colors.danger,
   },
   noAnswer: {
     fontSize: 14,
-    color: '#999',
+    color: colors.textMuted,
     fontStyle: 'italic',
   },
   buttonContainer: {
-    marginTop: 8,
+    marginTop: spacing.sm,
   },
 });

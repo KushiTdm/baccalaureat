@@ -1,11 +1,12 @@
 // components/Button.tsx
 import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, View } from 'react-native';
 import { ReactNode } from 'react';
+import { colors, radius, shadow } from '../constants/theme';
 
 type ButtonProps = {
   title: string;
   onPress: () => void;
-  variant?: 'primary' | 'secondary';
+  variant?: 'primary' | 'secondary' | 'danger';
   loading?: boolean;
   disabled?: boolean;
   icon?: ReactNode;
@@ -19,22 +20,30 @@ export default function Button({
   disabled = false,
   icon,
 }: ButtonProps) {
-  const isPrimary = variant === 'primary';
+  const variantStyle =
+    variant === 'primary'
+      ? styles.primaryButton
+      : variant === 'danger'
+        ? styles.dangerButton
+        : styles.secondaryButton;
+
+  const textStyle =
+    variant === 'secondary' ? styles.secondaryText : styles.primaryText;
 
   return (
     <TouchableOpacity
       style={[
         styles.button,
-        isPrimary ? styles.primaryButton : styles.secondaryButton,
+        variantStyle,
         (disabled || loading) && styles.disabledButton,
       ]}
       onPress={onPress}
       disabled={disabled || loading}
-      activeOpacity={0.7}
+      activeOpacity={0.75}
     >
       {loading ? (
         <ActivityIndicator
-          color={isPrimary ? '#fff' : '#007AFF'}
+          color={variant === 'secondary' ? colors.primary : '#fff'}
           size="small"
         />
       ) : (
@@ -43,7 +52,7 @@ export default function Button({
           <Text
             style={[
               styles.text,
-              isPrimary ? styles.primaryText : styles.secondaryText,
+              textStyle,
               (disabled || loading) && styles.disabledText,
             ]}
           >
@@ -59,21 +68,28 @@ const styles = StyleSheet.create({
   button: {
     paddingVertical: 16,
     paddingHorizontal: 24,
-    borderRadius: 12,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 56,
   },
   primaryButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
+    ...shadow.glow(colors.primary),
+  },
+  dangerButton: {
+    backgroundColor: colors.danger,
+    ...shadow.glow(colors.danger),
   },
   secondaryButton: {
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: '#007AFF',
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.primaryBorder,
   },
   disabledButton: {
-    opacity: 0.5,
+    opacity: 0.45,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   content: {
     flexDirection: 'row',
@@ -85,16 +101,16 @@ const styles = StyleSheet.create({
     marginRight: 4,
   },
   text: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
   },
   primaryText: {
     color: '#fff',
   },
   secondaryText: {
-    color: '#007AFF',
+    color: colors.primary,
   },
   disabledText: {
-    opacity: 0.7,
+    opacity: 0.8,
   },
 });

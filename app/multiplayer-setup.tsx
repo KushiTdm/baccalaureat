@@ -170,7 +170,7 @@ export default function MultiplayerSetupScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#0a0e27',
     padding: 20,
     paddingTop: 60,
   },
@@ -181,16 +181,18 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: '700',
-    color: '#333',
+    color: '#fff',
     marginTop: 16,
   },
   subtitle: {
     fontSize: 16,
-    color: '#666',
+    color: 'rgba(255, 255, 255, 0.7)',
     marginTop: 8,
   },
   infoCard: {
-    backgroundColor: '#e3f2fd',
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.3)',
     borderRadius: 12,
     padding: 16,
     flexDirection: 'row',
@@ -201,7 +203,7 @@ const styles = StyleSheet.create({
   infoText: {
     flex: 1,
     fontSize: 14,
-    color: '#1976d2',
+    color: 'rgba(255, 255, 255, 0.85)',
     lineHeight: 20,
   },
   scanningContainer: {
@@ -212,7 +214,7 @@ const styles = StyleSheet.create({
   },
   scanningText: {
     fontSize: 16,
-    color: '#666',
+    color: 'rgba(255, 255, 255, 0.7)',
   },
   emptyContainer: {
     flex: 1,
@@ -223,12 +225,12 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#333',
+    color: '#fff',
     marginBottom: 8,
   },
   emptySubtext: {
     fontSize: 14,
-    color: '#666',
+    color: 'rgba(255, 255, 255, 0.7)',
     textAlign: 'center',
     lineHeight: 20,
   },
@@ -239,11 +241,13 @@ const styles = StyleSheet.create({
   devicesTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#333',
+    color: '#fff',
     marginBottom: 12,
   },
   deviceCard: {
-    backgroundColor: '#fff',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
@@ -263,12 +267,12 @@ const styles = StyleSheet.create({
   deviceName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
+    color: '#fff',
     marginBottom: 4,
   },
   deviceId: {
     fontSize: 12,
-    color: '#999',
+    color: 'rgba(255, 255, 255, 0.45)',
   },
   buttonContainer: {
     gap: 12,

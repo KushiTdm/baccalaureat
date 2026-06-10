@@ -1,5 +1,5 @@
 // app/multiplayer-game.tsx - VERSION COMPLÈTE "PETIT BAC"
-import { View, Text, StyleSheet, ScrollView, Alert, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Alert, Dimensions, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore';
@@ -17,6 +17,7 @@ const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 export default function MultiplayerGameScreen() {
   const router = useRouter();
+  const scrollViewRef = useRef<ScrollView>(null);
   const {
     currentLetter,
     categories,
@@ -41,6 +42,7 @@ export default function MultiplayerGameScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [opponentFinished, setOpponentFinished] = useState(false);
   const [iStoppedEarly, setIStoppedEarly] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   
   // Refs pour la synchronisation
   const opponentResultsRef = useRef<GameResult[] | null>(null);
@@ -49,6 +51,23 @@ export default function MultiplayerGameScreen() {
   const hasSubmittedRef = useRef(false);
   const resolveOpponentRef = useRef<(() => void) | null>(null);
   const isProcessingEndGame = useRef(false);
+
+  // Gestion du clavier
+  useEffect(() => {
+    const keyboardWillShow = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      () => setKeyboardVisible(true)
+    );
+    const keyboardWillHide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardVisible(false)
+    );
+
+    return () => {
+      keyboardWillShow.remove();
+      keyboardWillHide.remove();
+    };
+  }, []);
 
   // Générer une nouvelle lettre qui n'a pas été utilisée
   const getNewLetter = useCallback(() => {
@@ -285,89 +304,104 @@ export default function MultiplayerGameScreen() {
   const progressPercent = categories.length > 0 ? (filledCount / categories.length) * 100 : 0;
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <View style={styles.roundBadge}>
-            <Text style={styles.roundLabel}>Manche {currentRound}</Text>
+    <KeyboardAvoidingView 
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    >
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <View style={styles.headerTop}>
+            <View style={styles.roundBadge}>
+              <Text style={styles.roundLabel}>Manche {currentRound}</Text>
+            </View>
+            <View style={styles.opponentBadge}>
+              <Text style={styles.opponentLabel}>VS {opponentName}</Text>
+            </View>
           </View>
-          <View style={styles.opponentBadge}>
-            <Text style={styles.opponentLabel}>VS {opponentName}</Text>
+
+          <View style={styles.letterContainer}>
+            <Text style={styles.letterLabel}>Lettre</Text>
+            <View style={styles.letterCircle}>
+              <Text style={styles.letter}>{currentLetter.toUpperCase()}</Text>
+            </View>
           </View>
-        </View>
 
-        <View style={styles.letterContainer}>
-          <Text style={styles.letterLabel}>Lettre</Text>
-          <View style={styles.letterCircle}>
-            <Text style={styles.letter}>{currentLetter.toUpperCase()}</Text>
-          </View>
-        </View>
-
-        <View style={styles.progressContainer}>
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
-          </View>
-          <Text style={styles.progressText}>
-            {filledCount}/{categories.length} catégories
-          </Text>
-        </View>
-
-        <Timer onTimeUp={handleTimeUp} />
-
-        {opponentFinished && (
-          <View style={styles.opponentFinishedNotice}>
-            <Text style={styles.opponentFinishedText}>
-              ⚡ {opponentName} a terminé ! Validation en cours...
+          <View style={styles.progressContainer}>
+            <View style={styles.progressBar}>
+              <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
+            </View>
+            <Text style={styles.progressText}>
+              {filledCount}/{categories.length} catégories
             </Text>
           </View>
-        )}
-      </View>
 
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {categories.map((category, index) => {
-          const answer = answers.find((a) => a.categorieId === category.id);
-          return (
-            <InputWord
-              key={category.id}
-              index={index}
-              category={category.nom}
-              value={answer?.word || ''}
-              onChangeText={(text) => setAnswer(category.id, text)}
-              letter={currentLetter}
-            />
-          );
-        })}
+          <Timer onTimeUp={handleTimeUp} />
 
-        <View style={styles.actionsContainer}>
-          <Button
-            title={submitting ? "Validation..." : "Valider mes réponses"}
-            onPress={handleSubmit}
-            loading={submitting}
-            disabled={submitting}
-          />
-
-          {!allFieldsFilled && (
-            <View style={styles.hintBox}>
-              <Text style={styles.hintText}>
-                💡 Remplissez toutes les catégories pour éviter la pénalité de validation
-              </Text>
-            </View>
-          )}
-
-          {allFieldsFilled && (
-            <View style={styles.warningBox}>
-              <Text style={styles.warningText}>
-                ⚠️ Attention : Si vous validez avec des mots invalides, vous recevrez une pénalité de 3 points
+          {opponentFinished && (
+            <View style={styles.opponentFinishedNotice}>
+              <Text style={styles.opponentFinishedText}>
+                ⚡ {opponentName} a terminé ! Validation en cours...
               </Text>
             </View>
           )}
         </View>
-      </ScrollView>
-    </View>
+
+        <ScrollView
+          ref={scrollViewRef}
+          style={styles.scrollView}
+          contentContainerStyle={[
+            styles.scrollContent,
+            keyboardVisible && styles.scrollContentKeyboardVisible
+          ]}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+        >
+          {categories.map((category, index) => {
+            const answer = answers.find((a) => a.categorieId === category.id);
+            return (
+              <InputWord
+                key={category.id}
+                index={index}
+                category={category.nom}
+                value={answer?.word || ''}
+                onChangeText={(text) => setAnswer(category.id, text)}
+                letter={currentLetter}
+              />
+            );
+          })}
+
+          <View style={styles.actionsContainer}>
+            <Button
+              title={submitting ? "Validation..." : "Valider mes réponses"}
+              onPress={handleSubmit}
+              loading={submitting}
+              disabled={submitting}
+            />
+
+            {!allFieldsFilled && (
+              <View style={styles.hintBox}>
+                <Text style={styles.hintText}>
+                  💡 Remplissez toutes les catégories pour éviter la pénalité de validation
+                </Text>
+              </View>
+            )}
+
+            {allFieldsFilled && (
+              <View style={styles.warningBox}>
+                <Text style={styles.warningText}>
+                  ⚠️ Attention : Si vous validez avec des mots invalides, vous recevrez une pénalité de 3 points
+                </Text>
+              </View>
+            )}
+          </View>
+          
+          {/* Espace supplémentaire pour le clavier */}
+          <View style={styles.keyboardSpacer} />
+        </ScrollView>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -480,6 +514,9 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: SAFE_AREA_HEIGHT,
   },
+  scrollContentKeyboardVisible: {
+    paddingBottom: 350, // Espace pour le clavier
+  },
   actionsContainer: {
     marginTop: 24,
     gap: 12,
@@ -508,5 +545,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     fontWeight: '500',
+  },
+  keyboardSpacer: {
+    height: 250, // Espace supplémentaire pour scroller sous le clavier
   },
 });

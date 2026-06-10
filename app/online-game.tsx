@@ -1,21 +1,19 @@
-// app/online-game.tsx - VERSION AMÉLIORÉE avec animations
-import { View, Text, StyleSheet, ScrollView, Alert, Dimensions } from 'react-native';
+// app/online-game.tsx - GAMEPLAY TEMPS RÉEL (socket.io) avec STOP simultané
+import { View, Text, StyleSheet, ScrollView, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore';
 import InputWord from '../components/InputWord';
 import Timer from '../components/Timer';
 import Button from '../components/Button';
 import { validateWord } from '../services/api';
-import { onlineService, EndGameRequest } from '../services/online';
-import { GameResult } from '../store/gameStore';
-import { Send, Flag, Clock, Zap, Users, Trophy, AlertCircle } from 'lucide-react-native';
-import Animated, { 
-  FadeIn, 
-  FadeInDown, 
-  FadeInUp, 
+import { websocketService, RoundAnswerResult } from '../services/websocket';
+import { Send, Zap, Users, Trophy, AlertCircle } from 'lucide-react-native';
+import Animated, {
+  FadeIn,
+  FadeInDown,
+  FadeInUp,
   SlideInRight,
-  SlideInLeft,
   BounceIn,
   useAnimatedStyle,
   useSharedValue,
@@ -23,7 +21,6 @@ import Animated, {
   withSequence,
   withRepeat,
   withTiming,
-  Easing,
 } from 'react-native-reanimated';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -33,398 +30,305 @@ export default function OnlineGameScreen() {
   const router = useRouter();
   const pulseAnim = useSharedValue(1);
   const shakeAnim = useSharedValue(0);
-  
+
   const {
     currentLetter,
     categories,
     answers,
     setAnswer,
-    setMultiplayerResults,
-    endGame,
     opponentName,
     currentRound,
-    setEndGameRequested,
   } = useGameStore();
 
-  const getAnswers = () => useGameStore.getState().answers;
-
   const [submitting, setSubmitting] = useState(false);
-  const [hasSubmitted, setHasSubmitted] = useState(false);
-  const [waitingForOpponent, setWaitingForOpponent] = useState(false);
-  const [endGameRequestPending, setEndGameRequestPending] = useState(false);
-  const [receivedEndGameRequest, setReceivedEndGameRequest] = useState<EndGameRequest | null>(null);
-  const [opponentFinished, setOpponentFinished] = useState(false);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const requestCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [stopped, setStopped] = useState(false);
+  const [stoppedByName, setStoppedByName] = useState<string | null>(null);
+  const [stoppedReason, setStoppedReason] = useState<string | null>(null);
+  const [opponentLeft, setOpponentLeft] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
 
-  const roomId = onlineService.getCurrentRoomId();
-  const playerId = onlineService.getCurrentPlayerId();
-  const roundId = onlineService.getCurrentRoundId();
+  // Garde-fous (refs pour éviter les stale closures dans les callbacks socket)
+  const finishedRef = useRef(false);   // j'ai déjà déclenché/reçu le STOP
+  const submittedRef = useRef(false);  // j'ai déjà soumis mon score
+  const navigatedRef = useRef(false);  // j'ai déjà navigué vers les résultats
+  const stopFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resultsFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    if (!roomId || !playerId) {
-      router.replace('/');
-      return;
-    }
+  const roomId = websocketService.getCurrentRoomId();
+  const playerId = websocketService.getCurrentPlayerId();
 
-    // Animation du pulse pour la lettre
-    pulseAnim.value = withRepeat(
-      withSequence(
-        withSpring(1.1, { damping: 2 }),
-        withSpring(1, { damping: 2 })
-      ),
-      -1,
-      true
-    );
-
-    initializeRound();
-    setupRealtime();
-
-    return () => {
-      onlineService.unsubscribeFromRoom();
-    };
-  }, []);
-
-  async function initializeRound() {
-    if (!roomId) return;
-
-    let round = await onlineService.getCurrentRound(roomId);
-
-    if (!round) {
-      const room = await onlineService.getRoom(roomId);
-      if (room) {
-        round = await onlineService.createRound(roomId, currentRound, room.letter);
-      }
-    }
-
-    if (round) {
-      onlineService.setCurrentRoundId(round.id);
-    }
-  }
-
-  function setupRealtime() {
-    if (!roomId) return;
-
-    onlineService.subscribeToRoom(roomId, {
-      onPlayerJoined: () => {},
-      onPlayerLeft: () => {},
-      onGameStarted: () => {},
-      onPlayerFinished: (player) => {
-        if (player.id !== playerId && !hasSubmitted && !submitting) {
-          console.log('🛑 Opponent finished! Triggering auto-submit.');
-          setOpponentFinished(true);
-          
-          // Animation de shake
-          shakeAnim.value = withSequence(
-            withTiming(10, { duration: 100 }),
-            withTiming(-10, { duration: 100 }),
-            withTiming(10, { duration: 100 }),
-            withTiming(0, { duration: 100 })
-          );
-
-          setTimeout(async () => {
-            await handleSubmit(false);
-          }, 500);
-        }
-      },
-      onEndGameRequestReceived: (request) => {
-        if (request.requester_player_id !== playerId && !hasSubmitted && !submitting) {
-          setReceivedEndGameRequest(request);
-          Alert.alert(
-            'Demande de fin',
-            `${opponentName} demande à arrêter la manche. Acceptez-vous ?`,
-            [
-              {
-                text: 'Refuser',
-                style: 'cancel',
-                onPress: async () => {
-                  await onlineService.respondToEndGameRequest(request.id, false);
-                  setReceivedEndGameRequest(null);
-                },
-              },
-              {
-                text: 'Accepter',
-                onPress: async () => {
-                  await onlineService.respondToEndGameRequest(request.id, true);
-                  setReceivedEndGameRequest(null);
-                  await handleSubmit(false);
-                },
-              },
-            ],
-            { cancelable: false }
-          );
-        }
-      },
-      onEndGameRequestResponded: (request) => {
-        if (request.requester_player_id === playerId && request.status === 'accepted') {
-          setEndGameRequestPending(false);
-          Alert.alert('Accepté', 'Votre adversaire a accepté. La manche se termine.');
-          handleSubmit(false);
-        } else if (request.requester_player_id === playerId && request.status === 'rejected') {
-          setEndGameRequestPending(false);
-          setEndGameRequested(false);
-          Alert.alert('Refusé', 'Votre adversaire a refusé.');
-        }
-      },
-      onRoundFinished: (round) => {
-        if (round.id === roundId && !hasSubmitted && !submitting) {
-          handleSubmit(false);
-        }
-      }
-    });
-  }
-
-
-
-
-
-  if (!currentLetter || categories.length === 0) {
-    router.replace('/');
-    return null;
-  }
-
-  async function handleTimeUp() {
-    await handleSubmit(false);
-  }
-
-  async function handleRequestEndGame() {
-    if (!roomId || !playerId || !roundId) {
-      Alert.alert('Erreur', 'Données de partie manquantes');
-      return;
-    }
-
-    Alert.alert(
-      'Demander la fin',
-      'Voulez-vous demander à votre adversaire d\'arrêter la manche ?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Envoyer',
-          onPress: async () => {
-            setEndGameRequestPending(true);
-            setEndGameRequested(true);
-
-            try {
-              await onlineService.requestEndGame(roomId, roundId, playerId);
-              // La réponse sera gérée par setupRealtime (onEndGameRequestResponded)
-            } catch (error) {
-              Alert.alert('Erreur', 'Impossible d\'envoyer la demande');
-              setEndGameRequestPending(false);
-              setEndGameRequested(false);
-            }
-          },
-        },
-      ]
-    );
-  }
-
-  async function handleAutoSubmit() {
-    await handleSubmit(false);
-  }
-
-  async function handleSubmit(stoppedEarly: boolean = true) {
-    if (submitting || hasSubmitted) return;
-
+  // Valide mes réponses localement, calcule le score (avec pénalité) et soumet
+  const validateAndSubmit = useCallback(async (stoppedEarly: boolean) => {
+    if (submittedRef.current) return;
+    submittedRef.current = true;
     setSubmitting(true);
-    setHasSubmitted(true);
-    endGame();
 
-    if (!roomId || !playerId || !roundId) {
-      Alert.alert('Erreur', 'Impossible de soumettre les réponses');
-      router.replace('/');
-      return;
-    }
+    const state = useGameStore.getState();
+    const cats = state.categories;
+    const ans = state.answers;
+    const letter = state.currentLetter;
 
-    try {
-      const answers = getAnswers();
-      const myResults: GameResult[] = [];
-      let myScore = 0;
-      let hasInvalidWord = false;
-      const allFieldsFilled = answers.length === categories.length && 
-                              answers.every(a => a.word.trim() !== '');
+    let myScore = 0;
+    let hasInvalidWord = false;
+    const allFieldsFilled =
+      ans.length === cats.length && ans.every((a) => a.word.trim() !== '');
 
-      for (const category of categories) {
-        const answer = answers.find((a) => a.categorieId === category.id);
+    // Validations en PARALLÈLE : en séquentiel, 8 catégories × latence réseau
+    // pouvaient dépasser le timeout serveur de collecte des scores.
+    const myResults: RoundAnswerResult[] = await Promise.all(
+      cats.map(async (category) => {
+        const answer = ans.find((a) => a.categorieId === category.id);
         const word = answer?.word?.trim() || '';
-
         let isValid = false;
         let points = 0;
 
         if (word) {
-          if (currentLetter && word.toLowerCase().startsWith(currentLetter.toLowerCase())) {
+          if (letter && word.toLowerCase().startsWith(letter.toLowerCase())) {
             try {
               isValid = await validateWord(word, category.id);
-              
-              if (isValid) {
-                points = 2;
-                myScore += points;
-              } else {
-                hasInvalidWord = true;
-              }
             } catch (error) {
               console.error('Validation error:', error);
+            }
+            if (isValid) {
+              points = 2;
+            } else {
+              hasInvalidWord = true;
             }
           } else {
             hasInvalidWord = true;
           }
         }
 
-        myResults.push({
+        return {
           categorieId: category.id,
           categorieName: category.nom,
           word,
           isValid,
           points,
-        });
+        };
+      })
+    );
 
-        try {
-          await onlineService.submitAnswer(
-            roomId,
-            playerId,
-            roundId,
-            category.id,
-            word,
-            isValid,
-            points,
-            false
-          );
-        } catch (error) {
-          console.error('Error submitting answer:', error);
-        }
-      }
+    myScore = myResults.reduce((sum, r) => sum + r.points, 0);
 
-      let penaltyApplied = false;
-      if (stoppedEarly && allFieldsFilled && hasInvalidWord) {
-        const penalty = 3;
-        myScore = Math.max(0, myScore - penalty);
-        penaltyApplied = true;
-      }
-
-      const validWordsCount = myResults.filter(r => r.isValid).length;
-      await onlineService.submitRoundScore(
-        roundId,
-        playerId,
-        myScore,
-        validWordsCount,
-        stoppedEarly && allFieldsFilled,
-        penaltyApplied
-      );
-
-      setMultiplayerResults(myResults, myScore, stoppedEarly && allFieldsFilled);
-
-      await waitForOpponentSubmission();
-      router.push('/online-results');
-    } catch (error) {
-      console.error('Submit error:', error);
-      Alert.alert('Erreur', 'Impossible de valider les réponses');
-    } finally {
-      setSubmitting(false);
+    // Pénalité -3 si on a crié STOP avec tous les champs remplis mais des erreurs
+    const penalize = stoppedEarly && allFieldsFilled && hasInvalidWord;
+    if (penalize) {
+      myScore = Math.max(0, myScore - 3);
     }
-  }
 
-  async function waitForOpponentSubmission(): Promise<boolean> {
-    if (!roomId || !playerId || !roundId) return false;
+    const validWordsCount = myResults.filter((r) => r.isValid).length;
+    const finalStoppedEarly = stoppedEarly && allFieldsFilled;
 
-    return new Promise<boolean>((resolve) => {
-      let checksCount = 0;
-      const maxChecks = 60;
+    // Sauvegarde locale (sera écrasée par la version serveur dans all-scores-ready)
+    state.setMultiplayerResults(myResults, myScore, finalStoppedEarly);
 
-      const checkInterval = setInterval(async () => {
-        checksCount++;
-        
-        try {
-          const scores = await onlineService.getRoundScores(roundId);
-          
-          if (scores.length >= 2) {
-            clearInterval(checkInterval);
-            setTimeout(() => resolve(true), 500);
-          } else if (checksCount >= maxChecks) {
-            clearInterval(checkInterval);
-            resolve(false);
-          }
-        } catch (error) {
-          console.error('Error checking scores:', error);
+    // Envoi au serveur temps réel
+    websocketService.submitScore(myScore, validWordsCount, finalStoppedEarly, myResults);
+
+    // Filet : si 'all-scores-ready' n'arrive jamais (serveur injoignable),
+    // on affiche au moins nos résultats locaux au lieu de bloquer l'écran.
+    if (resultsFallbackRef.current) clearTimeout(resultsFallbackRef.current);
+    resultsFallbackRef.current = setTimeout(() => {
+      if (!navigatedRef.current) {
+        navigatedRef.current = true;
+        console.warn('⚠️ all-scores-ready jamais reçu → résultats locaux');
+        router.replace('/online-results');
+      }
+    }, 25000);
+  }, [router]);
+
+  // Déclenche le STOP : on prévient le serveur, qui diffusera 'round-stopped' à TOUS
+  const triggerStop = useCallback((reason: 'manual' | 'timeout') => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    useGameStore.getState().endGame(); // fige le timer immédiatement côté local
+    websocketService.notifyFinished(reason);
+
+    // Filet : si 'round-stopped' ne revient pas (paquet perdu, coupure),
+    // on valide quand même nos réponses après 4s au lieu de rester bloqué.
+    stopFallbackRef.current = setTimeout(() => {
+      if (!submittedRef.current) {
+        console.warn('⚠️ round-stopped jamais reçu → validation locale');
+        setStopped(true);
+        validateAndSubmit(reason === 'manual');
+      }
+    }, 4000);
+  }, [validateAndSubmit]);
+
+  const handleTimeUp = useCallback(() => triggerStop('timeout'), [triggerStop]);
+
+  // Redirection hors du rendu (un router.replace pendant le render est un
+  // effet de bord interdit par React)
+  const shouldRedirect = !roomId || !playerId || !currentLetter || categories.length === 0;
+  useEffect(() => {
+    if (shouldRedirect) {
+      router.replace('/');
+    }
+  }, [shouldRedirect, router]);
+
+  useEffect(() => {
+    if (shouldRedirect) return;
+
+    pulseAnim.value = withRepeat(
+      withSequence(withSpring(1.1, { damping: 2 }), withSpring(1, { damping: 2 })),
+      -1,
+      true
+    );
+
+    // Repartir d'un état propre : les callbacks d'écrans démontés ne doivent
+    // plus réagir aux événements de cette manche.
+    websocketService.clearCallbacks();
+    websocketService.setCallbacks({
+      // (Re)synchronise lettre + horloge si game-started/new-round arrive après
+      // le montage (catch-up serveur). elapsed est calculé en temps serveur :
+      // l'invité qui arrive 3s après l'hôte démarre son timer à 117s, pas 120s.
+      onGameStarted: (data) => {
+        const s = useGameStore.getState();
+        if (data.letter) s.setLetter(data.letter);
+        if (data.roundNumber) useGameStore.setState({ currentRound: data.roundNumber });
+        const elapsedSec = data.startedAt
+          ? Math.max(0, (data.timestamp - data.startedAt) / 1000)
+          : 0;
+        s.syncRoundClock(data.roundDuration || 120, elapsedSec);
+      },
+
+      // *** STOP SIMULTANÉ *** — reçu par TOUS les joueurs en même temps
+      onRoundStopped: (data) => {
+        if (stopFallbackRef.current) {
+          clearTimeout(stopFallbackRef.current);
+          stopFallbackRef.current = null;
         }
-      }, 500);
+        if (submittedRef.current) return;
+        finishedRef.current = true;
+        setStopped(true);
+        setStoppedByName(data.stoppedByName);
+        setStoppedReason(data.reason);
+
+        useGameStore.getState().endGame(); // stoppe le timer instantanément
+
+        // shake visuel
+        shakeAnim.value = withSequence(
+          withTiming(10, { duration: 80 }),
+          withTiming(-10, { duration: 80 }),
+          withTiming(10, { duration: 80 }),
+          withTiming(0, { duration: 80 })
+        );
+
+        // Je n'ai de pénalité que si c'est MOI qui ai stoppé manuellement
+        const stoppedEarly = data.stoppedBy === playerId && data.reason === 'manual';
+        validateAndSubmit(stoppedEarly);
+      },
+
+      // Les deux scores sont prêts → on part aux résultats (source de vérité serveur)
+      onAllScoresReady: (data) => {
+        if (resultsFallbackRef.current) {
+          clearTimeout(resultsFallbackRef.current);
+          resultsFallbackRef.current = null;
+        }
+        if (navigatedRef.current) return;
+        navigatedRef.current = true;
+
+        const s = useGameStore.getState();
+        const me = data.results.find((r) => r.playerId === playerId);
+        const opp = data.results.find((r) => r.playerId !== playerId);
+
+        if (me) {
+          s.setMultiplayerResults(me.results || [], me.roundScore || 0, me.stoppedEarly || false);
+        }
+        s.setOpponentResults(opp?.results || [], opp?.roundScore || 0);
+
+        router.replace('/online-results');
+      },
+
+      // L'hôte est parti et le serveur m'a promu : sans ça, plus personne
+      // ne peut lancer la manche suivante.
+      onHostChanged: (data) => {
+        if (data.newHostId === playerId) {
+          useGameStore.getState().setIsHost(true);
+        }
+      },
+
+      onPlayerDisconnected: () => {
+        // L'adversaire a perdu la connexion : on prévient sans bloquer le joueur,
+        // qui peut toujours crier STOP (le serveur finalisera la manche).
+        setOpponentLeft(true);
+      },
+      onPlayerJoined: () => {
+        // L'adversaire est revenu
+        setOpponentLeft(false);
+      },
+      onPlayerLeft: () => {
+        setOpponentLeft(true);
+      },
+
+      // Ma propre connexion : socket.io rejoint automatiquement la room au
+      // retour (join-room + catch-up serveur resynchronisent la manche).
+      onDisconnected: () => setReconnecting(true),
+      onConnected: () => setReconnecting(false),
     });
+
+    return () => {
+      // On garde la connexion vivante pour l'écran de résultats / manches
+      // suivantes, mais on nettoie nos timers locaux.
+      if (stopFallbackRef.current) clearTimeout(stopFallbackRef.current);
+      if (resultsFallbackRef.current) clearTimeout(resultsFallbackRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Hooks toujours appelés AVANT le return conditionnel (règles des hooks)
+  const pulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulseAnim.value }] }));
+  const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shakeAnim.value }] }));
+
+  if (shouldRedirect) {
+    return null;
   }
 
-  const allFieldsFilled = answers.length === categories.length && 
-                          answers.every(a => a.word.trim() !== '');
+  const allFieldsFilled =
+    answers.length === categories.length && answers.every((a) => a.word.trim() !== '');
+  const filledCount = answers.filter((a) => a.word.trim() !== '').length;
+  const progressPercent = categories.length > 0 ? (filledCount / categories.length) * 100 : 0;
 
-  const pulseStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ scale: pulseAnim.value }],
-    };
-  });
-
-  const shakeStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ translateX: shakeAnim.value }],
-    };
-  });
-
-  const filledCount = answers.filter(a => a.word.trim() !== '').length;
-  const progressPercent = (filledCount / categories.length) * 100;
+  const busy = stopped || submitting;
 
   return (
     <View style={styles.container}>
-      <Animated.View 
-        entering={FadeIn.duration(600)} 
-        style={styles.backgroundGradient}
-      />
-      
-      <Animated.View 
-        entering={SlideInRight.springify()} 
-        style={styles.header}
-      >
+      <Animated.View entering={FadeIn.duration(600)} style={styles.backgroundGradient} />
+
+      <Animated.View entering={SlideInRight.springify()} style={styles.header}>
         <View style={styles.headerTop}>
-          <Animated.View 
-            entering={FadeInDown.delay(100).springify()}
-            style={styles.roundBadge}
-          >
+          <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.roundBadge}>
             <Trophy size={16} color="#FFD700" />
             <Text style={styles.roundLabel}>Manche {currentRound}</Text>
           </Animated.View>
 
-          <Animated.View 
-            entering={FadeInDown.delay(200).springify()}
-            style={styles.opponentBadge}
-          >
+          <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.opponentBadge}>
             <Users size={16} color="#007AFF" />
             <Text style={styles.opponentName}>{opponentName}</Text>
           </Animated.View>
         </View>
 
-        <Animated.View 
-          entering={BounceIn.delay(300)}
-          style={[styles.letterContainer, pulseStyle]}
-        >
-          <Text style={styles.letterLabel}>Lettre</Text>
-          <View style={styles.letterCircle}>
-            <Text style={styles.letter}>{currentLetter.toUpperCase()}</Text>
-          </View>
-        </Animated.View>
+        <View style={styles.letterTimerRow}>
+          <Animated.View entering={BounceIn.delay(300)} style={[styles.letterContainer, pulseStyle]}>
+            <Text style={styles.letterLabel}>Lettre</Text>
+            <View style={styles.letterCircle}>
+              <Text style={styles.letter}>{currentLetter.toUpperCase()}</Text>
+            </View>
+          </Animated.View>
 
-        <Animated.View 
-          entering={FadeInUp.delay(400)}
-          style={styles.progressContainer}
-        >
+          <Animated.View entering={FadeInUp.delay(400)} style={styles.timerWrapper}>
+            <Timer onTimeUp={handleTimeUp} />
+          </Animated.View>
+        </View>
+
+        <Animated.View entering={FadeInUp.delay(500)} style={styles.progressContainer}>
           <View style={styles.progressBar}>
-            <Animated.View 
-              style={[
-                styles.progressFill, 
-                { width: `${progressPercent}%` }
-              ]} 
-            />
+            <Animated.View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
           </View>
           <Text style={styles.progressText}>
             {filledCount}/{categories.length} catégories
           </Text>
-        </Animated.View>
-
-        <Animated.View entering={FadeInUp.delay(500)}>
-          <Timer onTimeUp={handleTimeUp} />
         </Animated.View>
       </Animated.View>
 
@@ -432,94 +336,75 @@ export default function OnlineGameScreen() {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         {categories.map((category, index) => {
           const answer = answers.find((a) => a.categorieId === category.id);
           return (
-            <Animated.View
-              key={category.id}
-              entering={FadeInDown.delay(600 + index * 50).springify()}
-            >
+            <Animated.View key={category.id} entering={FadeInDown.delay(600 + index * 50).springify()}>
               <InputWord
                 index={index}
                 category={category.nom}
                 value={answer?.word || ''}
                 onChangeText={(text) => setAnswer(category.id, text)}
                 letter={currentLetter}
+                editable={!busy}
               />
             </Animated.View>
           );
         })}
 
-        <Animated.View 
-          entering={FadeInUp.delay(800)} 
-          style={styles.actionsContainer}
-        >
-          {opponentFinished && (
-            <Animated.View 
-              entering={BounceIn}
-              style={[styles.opponentFinishedNotice, shakeStyle]}
-            >
+        <Animated.View entering={FadeInUp.delay(800)} style={styles.actionsContainer}>
+          {reconnecting && (
+            <View style={styles.hintBox}>
+              <AlertCircle size={16} color="#FF9800" />
+              <Text style={styles.hintText}>
+                Connexion perdue, reconnexion en cours...
+              </Text>
+            </View>
+          )}
+
+          {opponentLeft && !stopped && (
+            <View style={styles.hintBox}>
+              <AlertCircle size={16} color="#FF9800" />
+              <Text style={styles.hintText}>
+                {opponentName} s'est déconnecté. Vous pouvez crier STOP pour terminer.
+              </Text>
+            </View>
+          )}
+
+          {stopped && (
+            <Animated.View entering={BounceIn} style={[styles.opponentFinishedNotice, shakeStyle]}>
               <Zap size={24} color="#ff9800" />
               <View style={styles.noticeTextContainer}>
                 <Text style={styles.opponentFinishedTitle}>
-                  {opponentName} a terminé !
+                  {stoppedReason === 'timeout'
+                    ? 'Temps écoulé !'
+                    : stoppedByName
+                      ? `${stoppedByName} a crié STOP !`
+                      : 'STOP !'}
                 </Text>
                 <Text style={styles.opponentFinishedText}>
-                  Validation automatique dans 1 seconde...
+                  {submitting ? 'Validation de vos réponses...' : 'Calcul des scores...'}
                 </Text>
               </View>
             </Animated.View>
           )}
 
           <Button
-            title={submitting ? "Envoi en cours..." : "Valider mes réponses"}
-            onPress={() => handleSubmit(true)}
-            loading={submitting}
-            disabled={!allFieldsFilled || endGameRequestPending || opponentFinished}
+            title={busy ? 'Validation...' : "STOP ! J'ai terminé"}
+            onPress={() => triggerStop('manual')}
+            variant={allFieldsFilled ? 'primary' : 'danger'}
+            loading={busy}
+            disabled={busy}
             icon={<Send size={20} color="#fff" />}
           />
 
-          <Button
-            title="Demander l'arrêt"
-            onPress={handleRequestEndGame}
-            variant="secondary"
-            disabled={endGameRequestPending || submitting || opponentFinished}
-            icon={<Flag size={20} color="#007AFF" />}
-          />
-
-          {endGameRequestPending && (
-            <Animated.View 
-              entering={FadeInDown.springify()}
-              style={styles.waitingNotice}
-            >
-              <Clock size={20} color="#FF9800" />
-              <Text style={styles.waitingText}>
-                En attente de la réponse de {opponentName}...
-              </Text>
-            </Animated.View>
-          )}
-
-          {receivedEndGameRequest && (
-            <Animated.View 
-              entering={BounceIn}
-              style={styles.requestNotice}
-            >
-              <AlertCircle size={20} color="#007AFF" />
-              <Text style={styles.requestText}>
-                {opponentName} demande à arrêter la manche
-              </Text>
-            </Animated.View>
-          )}
-
-          {!allFieldsFilled && (
-            <Animated.View 
-              entering={FadeIn.delay(1000)}
-              style={styles.hintBox}
-            >
+          {!allFieldsFilled && !busy && (
+            <Animated.View entering={FadeIn.delay(1000)} style={styles.hintBox}>
               <AlertCircle size={16} color="#FF9800" />
               <Text style={styles.hintText}>
-                Remplissez toutes les catégories pour valider
+                Crier STOP arrête la manche pour tout le monde immédiatement.
               </Text>
             </Animated.View>
           )}
@@ -594,21 +479,28 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#007AFF',
   },
+  letterTimerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    gap: 16,
+  },
   letterContainer: {
     alignItems: 'center',
-    marginBottom: 20,
   },
   letterLabel: {
-    fontSize: 14,
+    fontSize: 13,
     color: 'rgba(255, 255, 255, 0.6)',
-    marginBottom: 12,
+    marginBottom: 8,
     fontWeight: '600',
     letterSpacing: 1,
+    textTransform: 'uppercase',
   },
   letterCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: 'rgba(0, 122, 255, 0.15)',
     borderWidth: 3,
     borderColor: '#007AFF',
@@ -621,15 +513,19 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   letter: {
-    fontSize: 48,
+    fontSize: 40,
     fontWeight: '800',
     color: '#007AFF',
     textShadowColor: 'rgba(0, 122, 255, 0.5)',
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 8,
   },
+  timerWrapper: {
+    flex: 1,
+    maxWidth: 200,
+  },
   progressContainer: {
-    marginBottom: 16,
+    marginBottom: 4,
   },
   progressBar: {
     height: 8,
@@ -688,38 +584,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: 'rgba(255, 255, 255, 0.8)',
     fontWeight: '500',
-  },
-  waitingNotice: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    padding: 16,
-    backgroundColor: 'rgba(255, 152, 0, 0.1)',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 152, 0, 0.3)',
-  },
-  waitingText: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.8)',
-    fontWeight: '600',
-  },
-  requestNotice: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    padding: 16,
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
-  },
-  requestText: {
-    fontSize: 14,
-    color: '#fff',
-    fontWeight: '700',
   },
   hintBox: {
     flexDirection: 'row',

@@ -1,5 +1,5 @@
 // app/index.tsx
-import { View, Text, StyleSheet, Alert, ScrollView, Dimensions, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Alert, ScrollView, Dimensions, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import Animated, {
@@ -17,7 +17,7 @@ import Animated, {
   withTiming,
   interpolate,
 } from 'react-native-reanimated';
-import { Download, Wifi, WifiOff, Globe, Bluetooth, Zap, Sparkles } from 'lucide-react-native';
+import { Download, Wifi, WifiOff, Globe, Bluetooth, Zap, Sparkles, RefreshCw, AlertCircle } from 'lucide-react-native';
 
 // Services et stores
 import { getCategories, downloadDictionary, isOnline } from '../services/api';
@@ -86,6 +86,8 @@ export default function HomeScreen() {
   const [hasOfflineDict, setHasOfflineDict] = useState(false);
   const [online, setOnline] = useState(true);
   const [initializing, setInitializing] = useState(true);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   // Animations
   const titleScale = useSharedValue(1);
@@ -147,6 +149,7 @@ export default function HomeScreen() {
 
   async function initializeApp() {
     try {
+      setConnectionError(null);
       // 1. Connexion automatique
       await login();
 
@@ -155,12 +158,19 @@ export default function HomeScreen() {
     } catch (error: any) {
       console.error('Erreur initialisation:', error);
       const errorMessage = error?.message || 'Erreur inconnue';
-      Alert.alert(
-        'Erreur de connexion', 
-        `Impossible de se connecter au serveur.\n\nDétails: ${errorMessage}\n\nVérifiez votre connexion internet.`
-      );
+      setConnectionError(errorMessage);
     } finally {
       setInitializing(false);
+    }
+  }
+
+  async function handleRetry() {
+    setRetrying(true);
+    setInitializing(true);
+    try {
+      await initializeApp();
+    } finally {
+      setRetrying(false);
     }
   }
 
@@ -258,7 +268,45 @@ export default function HomeScreen() {
           <Sparkles size={64} color="#007AFF" />
         </Animated.View>
         <ActivityIndicator size="large" color="#007AFF" style={{ marginTop: 20 }} />
-        <Text style={styles.loadingText}>Chargement...</Text>
+        <Text style={styles.loadingText}>
+          {retrying ? 'Nouvelle tentative...' : 'Chargement...'}
+        </Text>
+      </View>
+    );
+  }
+
+  // Écran d'erreur de connexion
+  if (connectionError && !user) {
+    return (
+      <View style={styles.errorContainer}>
+        <Animated.View entering={BounceIn.duration(800)}>
+          <AlertCircle size={80} color="#f44336" />
+        </Animated.View>
+        <Text style={styles.errorTitle}>Erreur de connexion</Text>
+        <Text style={styles.errorMessage}>
+          Impossible de se connecter au serveur.
+        </Text>
+        <View style={styles.errorDetailsCard}>
+          <Text style={styles.errorDetailsLabel}>Détails :</Text>
+          <Text style={styles.errorDetailsText}>{connectionError}</Text>
+        </View>
+        <TouchableOpacity 
+          style={styles.retryButton} 
+          onPress={handleRetry}
+          disabled={retrying}
+        >
+          <RefreshCw 
+            size={20} 
+            color="#fff" 
+            style={retrying ? styles.spinningIcon : undefined} 
+          />
+          <Text style={styles.retryButtonText}>
+            {retrying ? 'Connexion...' : 'Réessayer'}
+          </Text>
+        </TouchableOpacity>
+        <Text style={styles.errorHelp}>
+          Vérifiez votre connexion internet et réessayez.
+        </Text>
       </View>
     );
   }
@@ -374,9 +422,10 @@ export default function HomeScreen() {
           style={styles.buttonContainer}
         >
           <Button
-            title="🎮 Jouer solo"
+            title="Jouer solo"
             onPress={handleStartGame}
             loading={loading}
+            icon={<Zap size={20} color="#fff" />}
           />
 
           <View style={styles.divider}>
@@ -386,7 +435,7 @@ export default function HomeScreen() {
           </View>
 
           <Button
-            title="🌐 Jeu en ligne"
+            title="Jeu en ligne"
             onPress={handleStartOnline}
             variant="secondary"
             icon={<Globe size={20} color="#007AFF" />}
@@ -394,7 +443,7 @@ export default function HomeScreen() {
           />
 
           <Button
-            title="📱 Bluetooth (local)"
+            title="Bluetooth (local)"
             onPress={handleStartMultiplayer}
             variant="secondary"
             icon={<Bluetooth size={20} color="#007AFF" />}
@@ -405,11 +454,12 @@ export default function HomeScreen() {
           </View>
 
           <Button
-            title={hasOfflineDict ? '🔄 Mettre à jour' : '⬇️ Télécharger dictionnaire'}
+            title={hasOfflineDict ? 'Mettre à jour le dictionnaire' : 'Télécharger le dictionnaire'}
             onPress={handleDownloadDictionary}
             variant="secondary"
             loading={downloading}
             disabled={!online}
+            icon={<Download size={20} color="#007AFF" />}
           />
         </Animated.View>
 
@@ -456,7 +506,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#050816',
+    backgroundColor: '#0a0e27',
   },
   backgroundGradient: {
     position: 'absolute',
@@ -464,7 +514,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#050816',
+    backgroundColor: '#0a0e27',
   },
   particle: {
     position: 'absolute',
@@ -682,5 +732,72 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: 'rgba(255, 255, 255, 0.4)',
     fontWeight: '500',
+  },
+  errorContainer: {
+    flex: 1,
+    backgroundColor: '#0a0e27',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  errorTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#fff',
+    marginTop: 24,
+    textAlign: 'center',
+  },
+  errorMessage: {
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.7)',
+    marginTop: 12,
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  errorDetailsCard: {
+    backgroundColor: 'rgba(244, 67, 54, 0.1)',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 20,
+    width: '100%',
+    maxWidth: 350,
+    borderWidth: 1,
+    borderColor: 'rgba(244, 67, 54, 0.3)',
+  },
+  errorDetailsLabel: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.5)',
+    marginBottom: 4,
+    fontWeight: '600',
+  },
+  errorDetailsText: {
+    fontSize: 14,
+    color: '#f44336',
+    lineHeight: 20,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    marginTop: 24,
+    gap: 8,
+  },
+  retryButtonText: {
+    fontSize: 16,
+    color: '#fff',
+    fontWeight: '700',
+  },
+  spinningIcon: {
+    transform: [{ rotate: '360deg' }],
+  },
+  errorHelp: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.5)',
+    marginTop: 16,
+    textAlign: 'center',
   },
 });

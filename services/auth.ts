@@ -92,6 +92,12 @@ class AuthService {
     console.log('📱 Device ID COMPLET:', deviceId);
     console.log('📏 Longueur device ID:', deviceId.length);
 
+    // Vérifier la connexion à Supabase
+    const { error: healthError } = await supabase.from('categories').select('id').limit(1);
+    if (healthError && healthError.message.includes('Failed to fetch')) {
+      throw new Error('Impossible de se connecter au serveur. Vérifiez votre connexion internet.');
+    }
+
     // Chercher l'utilisateur existant
     const { data: existingUsers, error: fetchError } = await supabase
       .rpc('get_user_by_device', {
@@ -100,7 +106,14 @@ class AuthService {
 
     if (fetchError) {
       console.error('❌ Erreur lors de la recherche:', fetchError);
-      throw new Error('Impossible de vérifier le compte');
+      // Message d'erreur plus détaillé
+      if (fetchError.message.includes('function') && fetchError.message.includes('does not exist')) {
+        throw new Error('Les fonctions du serveur ne sont pas installées. Veuillez exécuter le script SQL database/auth-device-fix.sql dans Supabase.');
+      }
+      if (fetchError.message.includes('Failed to fetch') || fetchError.message.includes('NetworkError')) {
+        throw new Error('Problème de connexion réseau. Vérifiez votre connexion internet.');
+      }
+      throw new Error(`Erreur serveur: ${fetchError.message}`);
     }
 
     // existingUsers peut être un array ou un objet selon la version de PostgREST

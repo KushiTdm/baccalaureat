@@ -1,444 +1,166 @@
-// app/online-results.tsx - VERSION AMÉLIORÉE avec animations GSAP
-import { View, Text, StyleSheet, ScrollView, Alert, Modal, TouchableOpacity, ActivityIndicator, Dimensions } from 'react-native';
+// app/online-results.tsx - RÉSULTATS TEMPS RÉEL (socket.io)
+// Le scoring vient du serveur via 'all-scores-ready' (stocké dans le gameStore).
+// Les manches et l'arrêt de partie passent par socket.io.
+import { View, Text, StyleSheet, ScrollView, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import Animated, { FadeInDown, FadeInUp, BounceIn } from 'react-native-reanimated';
 import { useGameStore } from '../store/gameStore';
 import Button from '../components/Button';
-import { onlineService, GameRoomPlayer, GameRoomAnswer, GameRoundScore } from '../services/online';
-import { CheckCircle, XCircle, Trophy, Crown, AlertCircle, Play, StopCircle, Star, Zap, Award } from 'lucide-react-native';
-import { GameResult, RoundHistory } from '../store/gameStore';
-import { getCategories } from '../services/api';
-import { supabase } from '../lib/supabase';
-import Animated, { 
-  FadeIn, 
-  FadeInDown, 
-  FadeInUp, 
-  SlideInRight, 
-  SlideInLeft,
-  BounceIn,
-  ZoomIn,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-  withSequence,
-  withDelay,
-  withTiming,
-  Easing,
-  interpolate,
-} from 'react-native-reanimated';
+import { websocketService } from '../services/websocket';
+import { CheckCircle, XCircle, Trophy, Crown, Play, StopCircle, Star, Award, Zap } from 'lucide-react-native';
 
-const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
-const SAFE_AREA_HEIGHT = SCREEN_HEIGHT * 0.25; // 25% pour éviter le clavier
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const SAFE_AREA_HEIGHT = SCREEN_HEIGHT * 0.25;
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 export default function OnlineResultsScreen() {
   const router = useRouter();
-  const scrollY = useSharedValue(0);
-  const scoreScale = useSharedValue(0);
-  const [animatedScore, setAnimatedScore] = useState(0);
-  
-  const { 
-    results, 
-    score, 
-    resetGame, 
+
+  const {
+    results,
+    score,
+    opponentResults,
+    opponentScore,
+    opponentName,
     categories,
     currentRound,
-    totalScore,
-    opponentTotalScore,
+    currentLetter,
     roundHistory,
     addRoundToHistory,
-    updateTotalScores,
     startNewRound,
-    currentLetter,
-    startMultiplayerGame,
-    opponentName,
+    resetGame,
     isHost,
+    stoppedEarly,
   } = useGameStore();
 
-  const [allPlayers, setAllPlayers] = useState<GameRoomPlayer[]>([]);
-  const [allAnswers, setAllAnswers] = useState<GameRoomAnswer[]>([]);
-  const [roundScores, setRoundScores] = useState<GameRoundScore[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showValidationModal, setShowValidationModal] = useState(false);
-  const [contestedWord, setContestedWord] = useState<GameRoomAnswer | null>(null);
-  const [myVote, setMyVote] = useState<boolean | null>(null);
-  const [opponentVote, setOpponentVote] = useState<boolean | null>(null);
   const [showFinalResults, setShowFinalResults] = useState(false);
   const [waitingForNextRound, setWaitingForNextRound] = useState(false);
+  const [opponentGone, setOpponentGone] = useState(false);
 
-  const roomId = onlineService.getCurrentRoomId();
-  const currentPlayerId = onlineService.getCurrentPlayerId();
-  const roundId = onlineService.getCurrentRoundId();
+  const committedRef = useRef(false);
+  const navigatedRef = useRef(false);
+
+  const playerId = websocketService.getCurrentPlayerId();
+
+  const myResults = results || [];
+  const oppResults = opponentResults || [];
+
+  const myFinalScore = score || 0;
+  const opponentFinalScore = opponentScore || 0;
+  const myValid = myResults.filter((r) => r.isValid).length;
+  const oppValid = oppResults.filter((r) => r.isValid).length;
+
+  // Verrou : enregistre la manche courante dans l'historique une seule fois
+  const commitRoundToHistory = () => {
+    if (committedRef.current) return;
+    committedRef.current = true;
+    addRoundToHistory({
+      roundNumber: currentRound,
+      letter: currentLetter || '',
+      myScore: myFinalScore,
+      opponentScore: opponentFinalScore,
+      myValidWords: myValid,
+      opponentValidWords: oppValid,
+    });
+  };
 
   useEffect(() => {
-    if (!roomId || !results || !roundId) {
+    if (!results) {
       router.replace('/');
       return;
     }
-    loadResults();
-  }, [roomId, roundId]);
 
-  // Animation du score
-  useEffect(() => {
-    scoreScale.value = withSequence(
-      withSpring(1.2, { damping: 2 }),
-      withSpring(1, { damping: 8 })
-    );
+    // Les callbacks de l'écran de jeu (démonté) ne doivent plus réagir ici
+    websocketService.clearCallbacks();
+    websocketService.setCallbacks({
+      // L'hôte (ou n'importe qui) a lancé la manche suivante → tout le monde y va
+      onNewRound: (data) => {
+        if (navigatedRef.current) return;
+        navigatedRef.current = true;
+        commitRoundToHistory();
+        const s = useGameStore.getState();
+        // Numéro de manche + horloge synchronisés sur le serveur
+        s.startNewRound(data.letter, data.roundNumber);
+        if (data.roundDuration) {
+          const elapsedSec = data.startedAt
+            ? Math.max(0, (data.timestamp - data.startedAt) / 1000)
+            : 0;
+          s.syncRoundClock(data.roundDuration, elapsedSec);
+        }
+        router.replace('/online-game');
+      },
+      // Fin de partie demandée → écran final pour tous
+      onGameEnded: () => {
+        commitRoundToHistory();
+        setShowFinalResults(true);
+      },
+      // Si l'hôte part, le serveur me promeut : je peux lancer la suite
+      onHostChanged: (data) => {
+        if (data.newHostId === playerId) {
+          useGameStore.getState().setIsHost(true);
+        }
+      },
+      onPlayerDisconnected: () => setOpponentGone(true),
+      onPlayerLeft: () => setOpponentGone(true),
+      onPlayerJoined: () => setOpponentGone(false),
+    });
+
+    return () => {};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadResults() {
-    if (!roomId || !roundId) return;
+  const getNewLetter = () => {
+    const used = roundHistory.map((r) => r.letter);
+    if (currentLetter) used.push(currentLetter);
+    const available = LETTERS.filter((l) => !used.includes(l));
+    if (available.length === 0) return LETTERS[Math.floor(Math.random() * LETTERS.length)];
+    return available[Math.floor(Math.random() * available.length)];
+  };
 
-    try {
-      setLoading(true);
-      
-      // Attendre que les deux joueurs aient soumis leurs scores (max 10 secondes)
-      let players = await onlineService.getPlayers(roomId);
-      let scores = await onlineService.getRoundScores(roundId);
-      let attempts = 0;
-      
-      while (scores.length < players.length && attempts < 20) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        scores = await onlineService.getRoundScores(roundId);
-        attempts++;
-      }
-
-      const answers = await onlineService.getRoundAnswers(roundId);
-
-      setAllPlayers(players);
-      setAllAnswers(answers);
-      setRoundScores(scores);
-      
-      // Animer le compteur de score
-      const myAnswers = answers.filter(a => a.player_id === currentPlayerId);
-      const myRoundScore = scores.find(s => s.player_id === currentPlayerId);
-      const finalScore = calculateFinalScore(myAnswers, myRoundScore);
-      animateScore(finalScore);
-      
-    } catch (error) {
-      console.error('Error loading results:', error);
-    } finally {
-      setLoading(false);
+  const handleNextRound = () => {
+    setWaitingForNextRound(true);
+    if (isHost) {
+      // L'hôte choisit la lettre et déclenche ; onNewRound fera naviguer tout le monde
+      websocketService.nextRound(getNewLetter());
     }
-  }
+    // Le non-hôte attend simplement le 'new-round' du serveur
+  };
 
-  function animateScore(targetScore: number) {
-    const duration = 2000;
-    const steps = 60;
-    const increment = targetScore / steps;
-    let current = 0;
+  const handleStopGame = () => {
+    commitRoundToHistory();
+    websocketService.endGame(); // serveur → 'game-ended' à tous
+    setShowFinalResults(true);
+  };
 
-    const interval = setInterval(() => {
-      current += increment;
-      if (current >= targetScore) {
-        setAnimatedScore(targetScore);
-        clearInterval(interval);
-      } else {
-        setAnimatedScore(Math.floor(current));
-      }
-    }, duration / steps);
-  }
-
-  if (!results || !roomId || !currentPlayerId || !roundId) {
+  const handleNewGame = () => {
+    websocketService.disconnect();
+    resetGame();
     router.replace('/');
+  };
+
+  if (!results) {
     return null;
   }
 
-  const opponent = allPlayers.find(p => p.id !== currentPlayerId);
-  const myRoundScore = roundScores.find(s => s.player_id === currentPlayerId);
-  const opponentRoundScore = roundScores.find(s => s.player_id !== currentPlayerId);
+  // Totaux cumulés calculés UNIQUEMENT depuis l'historique (source unique)
+  const histMy = roundHistory.reduce((s, r) => s + r.myScore, 0);
+  const histOpp = roundHistory.reduce((s, r) => s + r.opponentScore, 0);
+  // Sur l'écran final, la manche courante est déjà committée dans l'historique
+  const myTotalScore = showFinalResults ? histMy : histMy + myFinalScore;
+  const opponentTotal = showFinalResults ? histOpp : histOpp + opponentFinalScore;
 
-  const myAnswers = allAnswers.filter(a => a.player_id === currentPlayerId);
-  const opponentAnswers = allAnswers.filter(a => a.player_id !== currentPlayerId);
-  
-  function calculateFinalScore(answers: GameRoomAnswer[], roundScore: GameRoundScore | undefined) {
-    if (!roundScore) return 0;
-    const totalPoints = answers.reduce((sum, a) => sum + a.points, 0);
-    const allValid = answers.every(a => !a.word || a.is_valid);
-    if (roundScore.stopped_early && !allValid) {
-      return Math.max(0, totalPoints - 3);
-    }
-    return totalPoints;
-  }
-
-  const myFinalScore = calculateFinalScore(myAnswers, myRoundScore);
-  const opponentFinalScore = calculateFinalScore(opponentAnswers, opponentRoundScore);
-
-  async function handleContestWord(answer: GameRoomAnswer) {
-    setContestedWord(answer);
-    setMyVote(null);
-    setOpponentVote(null);
-
-    const existingVotes = await onlineService.getWordValidationVotes(answer.id);
-    
-    if (existingVotes.length === 0 && roomId && roundId) {
-      await onlineService.createWordValidationVote(
-        roomId,
-        roundId,
-        answer.id,
-        answer.word,
-        answer.categorie_id,
-        allPlayers
-      );
-    } else {
-      const myExistingVote = existingVotes.find(v => v.player_id === currentPlayerId);
-      const opponentExistingVote = existingVotes.find(v => v.player_id !== currentPlayerId);
-      
-      if (myExistingVote) setMyVote(myExistingVote.vote);
-      if (opponentExistingVote) setOpponentVote(opponentExistingVote.vote);
-    }
-
-    setShowValidationModal(true);
-  }
-
-  async function handleVote(isValid: boolean) {
-    if (!contestedWord) return;
-
-    setMyVote(isValid);
-
-    try {
-      const votes = await onlineService.getWordValidationVotes(contestedWord.id);
-      const myVoteRecord = votes.find(v => v.player_id === currentPlayerId);
-      
-      if (myVoteRecord && currentPlayerId) {
-        await onlineService.voteForWordValidation(myVoteRecord.id, currentPlayerId, isValid);
-        Alert.alert('Vote enregistré', 'En attente du vote de votre adversaire...');
-
-        let pollCount = 0;
-        const maxPolls = 60;
-
-        const checkVotes = setInterval(async () => {
-          pollCount++;
-          const updatedVotes = await onlineService.getWordValidationVotes(contestedWord.id);
-          const allVoted = updatedVotes.every(v => v.vote !== null);
-
-          if (allVoted) {
-            clearInterval(checkVotes);
-            const allValid = updatedVotes.every(v => v.vote === true);
-            const points = allValid ? 2 : 0;
-
-            await onlineService.updateAnswerWithManualValidation(contestedWord.id, allValid, points);
-            
-            if (roundId) {
-              await recalculateRoundScores();
-            }
-
-            setShowValidationModal(false);
-            Alert.alert(
-              'Validation terminée',
-              allValid ? 'Le mot a été validé ✅' : 'Le mot a été refusé ❌'
-            );
-          } else if (pollCount >= maxPolls) {
-            clearInterval(checkVotes);
-            Alert.alert('Timeout', 'Votre adversaire n\'a pas voté à temps');
-          }
-        }, 1000);
-      }
-    } catch (error) {
-      Alert.alert('Erreur', 'Impossible d\'enregistrer le vote');
-    }
-  }
-
-  async function recalculateRoundScores() {
-    if (!roomId || !roundId) return;
-
-    try {
-      const updatedAnswers = await onlineService.getRoundAnswers(roundId);
-      if (!roomId) return;
-      if (!roomId) return;
-      const players = await onlineService.getPlayers(roomId);
-
-      for (const player of players) {
-        const playerAnswers = updatedAnswers.filter(a => a.player_id === player.id);
-        const newScore = playerAnswers.reduce((sum, a) => sum + a.points, 0);
-        const validWordsCount = playerAnswers.filter(a => a.is_valid).length;
-
-        await supabase
-          .from('game_round_scores')
-          .update({
-            round_score: newScore,
-            valid_words_count: validWordsCount,
-          })
-          .eq('round_id', roundId)
-          .eq('player_id', player.id);
-      }
-
-      setAllAnswers(updatedAnswers);
-    } catch (error) {
-      console.error('Error recalculating scores:', error);
-    }
-  }
-
-  async function handleNextRound() {
-    if (!roomId || !opponent || !currentPlayerId) return;
-
-    try {
-      await onlineService.setPlayerReady(currentPlayerId, true);
-      setWaitingForNextRound(true);
-
-      const roundData: RoundHistory = {
-        roundNumber: currentRound,
-        letter: currentLetter || '',
-        myScore: myFinalScore,
-        opponentScore: opponentFinalScore,
-        myValidWords: myAnswers.filter(a => a.is_valid).length,
-        opponentValidWords: opponentAnswers.filter(a => a.is_valid).length,
-      };
-      addRoundToHistory(roundData);
-      updateTotalScores(myFinalScore, opponentFinalScore);
-
-      await waitForBothPlayersReady();
-
-      let newRound;
-      if (isHost) {
-        const newLetter = await onlineService.getNextLetter(roomId);
-        newRound = await onlineService.createRound(roomId, currentRound + 1, newLetter);
-      } else {
-        newRound = await waitForNewRound();
-      }
-
-      if (!newRound) throw new Error('Impossible de créer/trouver la nouvelle manche');
-
-      onlineService.setCurrentRoundId(newRound.id);
-      startNewRound(newRound.letter);
-
-      const cats = await getCategories();
-      if (opponent) {
-        startMultiplayerGame(newRound.letter, cats, isHost, opponent.player_name);
-      }
-
-      router.replace('/online-game');
-    } catch (error) {
-      Alert.alert('Erreur', 'Impossible de démarrer la manche suivante');
-      setWaitingForNextRound(false);
-      await onlineService.setPlayerReady(currentPlayerId, false);
-    }
-  }
-
-  async function waitForBothPlayersReady() {
-    if (!roomId) return;
-
-    return new Promise<void>((resolve, reject) => {
-      // 1. Vérifier immédiatement
-      onlineService.getPlayers(roomId).then(players => {
-        if (players.every(p => p.ready_for_next_round)) {
-          resolve();
-          return;
-        }
-      });
-
-      // 2. Écouter les changements via Realtime
-      onlineService.subscribeToRoom(roomId, {
-        onPlayerJoined: () => {},
-        onPlayerLeft: () => {},
-        onGameStarted: () => {},
-        onPlayerFinished: () => {},
-        onRoundFinished: () => {},
-        // On utilise une astuce : on écoute les changements de joueurs via un callback générique si possible
-        // ou on poll plus intelligemment. Comme subscribeToRoom est limité, on va poller mais plus vite.
-      });
-
-      let checksCount = 0;
-      const maxChecks = 60;
-      const checkInterval = setInterval(async () => {
-        checksCount++;
-        const players = await onlineService.getPlayers(roomId);
-        if (players.every(p => p.ready_for_next_round)) {
-          clearInterval(checkInterval);
-          resolve();
-        } else if (checksCount >= maxChecks) {
-          clearInterval(checkInterval);
-          reject(new Error('Délai d\'attente dépassé'));
-        }
-      }, 1000);
-    });
-  }
-
-  async function waitForNewRound() {
-    return new Promise<any>((resolve, reject) => {
-      let checksCount = 0;
-      const maxChecks = 60;
-
-      const checkInterval = setInterval(async () => {
-        checksCount++;
-        if (!roomId) return;
-      const newRound = await onlineService.getCurrentRound(roomId);
-        
-        if (newRound && newRound.round_number === currentRound + 1) {
-          clearInterval(checkInterval);
-          resolve(newRound);
-        } else if (checksCount >= maxChecks) {
-          clearInterval(checkInterval);
-          reject(new Error('Timeout'));
-        }
-      }, 500);
-    });
-  }
-
-  async function handleStopGame() {
-    Alert.alert(
-      'Arrêter la partie',
-      'Voulez-vous vraiment arrêter la partie ?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Arrêter',
-          style: 'destructive',
-          onPress: async () => {
-            const roundData: RoundHistory = {
-              roundNumber: currentRound,
-              letter: currentLetter || '',
-              myScore: myFinalScore,
-              opponentScore: opponentFinalScore,
-              myValidWords: myAnswers.filter(a => a.is_valid).length,
-              opponentValidWords: opponentAnswers.filter(a => a.is_valid).length,
-            };
-            addRoundToHistory(roundData);
-            updateTotalScores(myFinalScore, opponentFinalScore);
-
-            if (roomId) {
-              await onlineService.finishGame(roomId);
-            }
-            setShowFinalResults(true);
-          },
-        },
-      ]
-    );
-  }
-
-  function handleNewGame() {
-    onlineService.clearCurrentRoom();
-    resetGame();
-    router.replace('/');
-  }
-
-  const myTotalScore = totalScore + myFinalScore;
-  const opponentTotal = opponentTotalScore + opponentFinalScore;
-
-  const scoreAnimStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ scale: scoreScale.value }],
-    };
-  });
-
+  // ---------- ÉCRAN FINAL ----------
   if (showFinalResults) {
     const isWinner = myTotalScore > opponentTotal;
     const isDraw = myTotalScore === opponentTotal;
+    const myWordsTotal = roundHistory.reduce((s, r) => s + r.myValidWords, 0);
+    const oppWordsTotal = roundHistory.reduce((s, r) => s + r.opponentValidWords, 0);
 
     return (
       <View style={styles.container}>
-        <Animated.View 
-          entering={FadeIn.duration(600)} 
-          style={styles.backgroundGradient}
-        />
-        
-        <ScrollView 
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-          <Animated.View 
-            entering={ZoomIn.delay(200).springify()} 
-            style={styles.winnerSection}
-          >
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <Animated.View entering={BounceIn.duration(700)} style={styles.winnerSection}>
             {isDraw ? (
               <>
                 <Trophy size={80} color="#FFD700" />
@@ -448,73 +170,49 @@ export default function OnlineResultsScreen() {
               <>
                 <Crown size={80} color="#FFD700" />
                 <Text style={styles.winnerText}>Victoire ! 🎉</Text>
-                <Animated.View entering={FadeInUp.delay(400)} style={styles.confetti}>
-                  <Text style={styles.confettiText}>🎊🎊🎊</Text>
-                </Animated.View>
               </>
             ) : (
               <>
                 <Trophy size={80} color="#999" />
                 <Text style={styles.loserText}>Défaite</Text>
-                <Text style={styles.winnerName}>{opponent?.player_name} gagne !</Text>
+                <Text style={styles.winnerName}>{opponentName} gagne !</Text>
               </>
             )}
           </Animated.View>
 
-          <Animated.View 
-            entering={FadeInDown.delay(300).springify()} 
-            style={styles.finalScoresCard}
-          >
+          <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.finalScoresCard}>
             <View style={styles.cardHeader}>
               <Award size={24} color="#007AFF" />
               <Text style={styles.sectionTitle}>Score final</Text>
             </View>
-            
+
             <View style={styles.finalScoresRow}>
-              <Animated.View 
-                entering={SlideInLeft.delay(400).springify()}
-                style={[styles.finalScoreBlock, isWinner && styles.winnerBlock]}
-              >
+              <View style={[styles.finalScoreBlock, isWinner && styles.winnerBlock]}>
                 <Text style={styles.playerLabel}>Vous</Text>
                 <Text style={styles.finalScoreValue}>{myTotalScore}</Text>
                 <View style={styles.statsRow}>
                   <Star size={16} color="#FFD700" />
-                  <Text style={styles.validCount}>
-                    {roundHistory.reduce((sum, r) => sum + r.myValidWords, 0) + myAnswers.filter(a => a.is_valid).length} mots
-                  </Text>
+                  <Text style={styles.validCount}>{myWordsTotal} mots</Text>
                 </View>
-              </Animated.View>
+              </View>
 
-              <Animated.View 
-                entering={SlideInRight.delay(400).springify()}
-                style={[styles.finalScoreBlock, !isWinner && !isDraw && styles.winnerBlock]}
-              >
-                <Text style={styles.playerLabel}>{opponent?.player_name}</Text>
+              <View style={[styles.finalScoreBlock, !isWinner && !isDraw && styles.winnerBlock]}>
+                <Text style={styles.playerLabel}>{opponentName}</Text>
                 <Text style={styles.finalScoreValue}>{opponentTotal}</Text>
                 <View style={styles.statsRow}>
                   <Star size={16} color="#FFD700" />
-                  <Text style={styles.validCount}>
-                    {roundHistory.reduce((sum, r) => sum + r.opponentValidWords, 0) + opponentAnswers.filter(a => a.is_valid).length} mots
-                  </Text>
+                  <Text style={styles.validCount}>{oppWordsTotal} mots</Text>
                 </View>
-              </Animated.View>
+              </View>
             </View>
           </Animated.View>
 
-          <Animated.View 
-            entering={FadeInUp.delay(500)} 
-            style={styles.historyContainer}
-          >
-            <Text style={styles.sectionTitle}>Historique ({roundHistory.length + 1} manches)</Text>
-            {[...roundHistory, {
-              roundNumber: currentRound,
-              letter: currentLetter || '',
-              myScore: myFinalScore,
-              opponentScore: opponentFinalScore,
-            }].map((round, index) => (
-              <Animated.View 
+          <View style={styles.historyContainer}>
+            <Text style={styles.sectionTitle}>Historique ({roundHistory.length} manches)</Text>
+            {roundHistory.map((round, index) => (
+              <Animated.View
                 key={index}
-                entering={FadeInDown.delay(600 + index * 100).springify()}
+                entering={FadeInDown.delay(300 + index * 80).springify()}
                 style={styles.historyCard}
               >
                 <View style={styles.historyHeader}>
@@ -525,16 +223,13 @@ export default function OnlineResultsScreen() {
                 </View>
                 <View style={styles.historyScores}>
                   <Text style={styles.historyScore}>Vous: {round.myScore}pts</Text>
-                  <Text style={styles.historyScore}>{opponent?.player_name}: {round.opponentScore}pts</Text>
+                  <Text style={styles.historyScore}>{opponentName}: {round.opponentScore}pts</Text>
                 </View>
               </Animated.View>
             ))}
-          </Animated.View>
+          </View>
 
-          <Animated.View 
-            entering={FadeInUp.delay(700)} 
-            style={styles.buttonContainer}
-          >
+          <Animated.View entering={FadeInUp.delay(400)} style={styles.buttonContainer}>
             <Button title="Nouvelle partie" onPress={handleNewGame} />
           </Animated.View>
         </ScrollView>
@@ -542,108 +237,106 @@ export default function OnlineResultsScreen() {
     );
   }
 
+  // ---------- ÉCRAN D'ATTENTE MANCHE SUIVANTE ----------
   if (waitingForNextRound) {
     return (
       <View style={styles.container}>
-        <Animated.View entering={FadeIn} style={styles.waitingContainer}>
-          <Animated.View entering={BounceIn.delay(200)}>
-            <ActivityIndicator size="large" color="#007AFF" />
-          </Animated.View>
-          <Animated.Text 
-            entering={FadeInUp.delay(400)} 
-            style={styles.waitingTitle}
-          >
-            {isHost ? 'Création de la manche...' : 'En attente...'}
-          </Animated.Text>
-          <Animated.Text 
-            entering={FadeInUp.delay(600)} 
-            style={styles.waitingText}
-          >
-            {isHost ? 'Préparation de la nouvelle manche' : `${opponent?.player_name} prépare la manche`}
-          </Animated.Text>
-        </Animated.View>
+        <View style={styles.waitingContainer}>
+          <Text style={styles.waitingTitle}>
+            {isHost ? 'Lancement de la manche...' : "En attente de l'hôte..."}
+          </Text>
+          <Text style={styles.waitingText}>
+            {isHost ? 'Préparation de la nouvelle manche' : `${opponentName} prépare la prochaine manche`}
+          </Text>
+
+          {opponentGone && (
+            <View style={styles.waitingActions}>
+              <Text style={styles.opponentGoneText}>
+                ⚠️ {opponentName} semble avoir quitté la partie.
+              </Text>
+              {isHost && (
+                <Button
+                  title="Relancer la manche"
+                  onPress={() => websocketService.nextRound(getNewLetter())}
+                  icon={<Play size={20} color="#fff" />}
+                />
+              )}
+              <Button
+                title="Terminer la partie"
+                onPress={handleStopGame}
+                variant="secondary"
+                icon={<StopCircle size={20} color="#007AFF" />}
+              />
+            </View>
+          )}
+        </View>
       </View>
     );
   }
 
+  // ---------- RÉSULTATS DE LA MANCHE ----------
   return (
     <View style={styles.container}>
-      <Animated.View 
-        entering={FadeIn.duration(600)} 
-        style={styles.backgroundGradient}
-      />
-      
-      <ScrollView 
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        <Animated.View 
-          entering={FadeInDown.delay(100).springify()} 
-          style={styles.roundHeader}
-        >
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <Animated.View entering={FadeInDown.duration(400)} style={styles.roundHeader}>
           <Text style={styles.roundTitle}>Manche {currentRound}</Text>
           <View style={styles.letterBadge}>
             <Text style={styles.letterText}>{currentLetter}</Text>
           </View>
         </Animated.View>
 
-        <Animated.View 
-          entering={ZoomIn.delay(200).springify()}
-          style={styles.scoreCard}
-        >
+        <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.scoreCard}>
           <View style={styles.scoreHeader}>
             <Zap size={24} color="#FFD700" />
             <Text style={styles.scoreLabel}>Score de la manche</Text>
           </View>
-          
+
           <View style={styles.scoresRow}>
-            <Animated.View 
-              entering={SlideInLeft.delay(300).springify()}
-              style={styles.scoreBlock}
-            >
+            <View style={styles.scoreBlock}>
               <Text style={styles.playerLabel}>Vous</Text>
-              <Animated.Text style={[styles.scoreValue, scoreAnimStyle]}>
-                {myFinalScore}
-              </Animated.Text>
+              <Text style={styles.scoreValue}>{myFinalScore}</Text>
               <View style={styles.statsRow}>
                 <CheckCircle size={16} color="#4caf50" />
-                <Text style={styles.validCount}>{myAnswers.filter(a => a.is_valid).length} valides</Text>
+                <Text style={styles.validCount}>{myValid} valides</Text>
               </View>
-              {myRoundScore?.stopped_early && myAnswers.some(a => !a.is_valid) && (
-                <Text style={styles.penaltyText}>⚠️ -3pts</Text>
+              {stoppedEarly && myResults.some((r) => r.word && !r.isValid) && (
+                <Text style={styles.penaltyText}>⚠️ -3pts (pénalité)</Text>
               )}
-            </Animated.View>
+            </View>
 
-            <Animated.View 
-              entering={SlideInRight.delay(300).springify()}
-              style={styles.scoreBlock}
-            >
-              <Text style={styles.playerLabel}>{opponent?.player_name}</Text>
+            <View style={styles.scoreBlock}>
+              <Text style={styles.playerLabel}>{opponentName}</Text>
               <Text style={styles.scoreValue}>{opponentFinalScore}</Text>
               <View style={styles.statsRow}>
                 <CheckCircle size={16} color="#4caf50" />
-                <Text style={styles.validCount}>{opponentAnswers.filter(a => a.is_valid).length} valides</Text>
+                <Text style={styles.validCount}>{oppValid} valides</Text>
               </View>
-              {opponentRoundScore?.stopped_early && opponentAnswers.some(a => !a.is_valid) && (
-                <Text style={styles.penaltyText}>⚠️ -3pts</Text>
-              )}
-            </Animated.View>
+            </View>
           </View>
         </Animated.View>
 
-        <Animated.View 
-          entering={FadeInUp.delay(400)} 
-          style={styles.comparisonContainer}
-        >
-          <Text style={styles.sectionTitle}>Réponses</Text>
-          {categories.map((category, index) => {
-            const myAnswer = myAnswers.find(a => a.categorie_id === category.id);
-            const oppAnswer = opponentAnswers.find(a => a.categorie_id === category.id);
+        <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.totalScoreCard}>
+          <Text style={styles.totalScoreLabel}>Score total</Text>
+          <View style={styles.totalScoreRow}>
+            <Text style={styles.totalScoreValue}>{myTotalScore}</Text>
+            <Text style={styles.totalScoreSeparator}>-</Text>
+            <Text style={styles.totalScoreValue}>{opponentTotal}</Text>
+          </View>
+        </Animated.View>
 
+        <View style={styles.comparisonContainer}>
+          <Text style={styles.sectionTitle}>Réponses</Text>
+          <View style={styles.comparisonLegend}>
+            <Text style={styles.legendText}>Vous</Text>
+            <Text style={styles.legendText}>{opponentName}</Text>
+          </View>
+          {categories.map((category, index) => {
+            const myAnswer = myResults.find((r) => r.categorieId === category.id);
+            const oppAnswer = oppResults.find((r) => r.categorieId === category.id);
             return (
-              <Animated.View 
-                key={category.id}
-                entering={FadeInDown.delay(500 + index * 50).springify()}
+              <Animated.View
+                key={category.id ?? index}
+                entering={FadeInDown.delay(250 + index * 60).springify()}
                 style={styles.comparisonCard}
               >
                 <Text style={styles.categoryName}>{category.nom}</Text>
@@ -652,15 +345,10 @@ export default function OnlineResultsScreen() {
                     {myAnswer?.word ? (
                       <View style={styles.answerContainer}>
                         <Text style={styles.answerWord}>{myAnswer.word}</Text>
-                        {myAnswer.is_valid ? (
+                        {myAnswer.isValid ? (
                           <CheckCircle size={20} color="#4caf50" />
                         ) : (
-                          <View style={styles.contestRow}>
-                            <XCircle size={20} color="#f44336" />
-                            <TouchableOpacity onPress={() => handleContestWord(myAnswer)}>
-                              <AlertCircle size={20} color="#FF9800" />
-                            </TouchableOpacity>
-                          </View>
+                          <XCircle size={20} color="#f44336" />
                         )}
                         <Text style={styles.pointsText}>+{myAnswer.points}</Text>
                       </View>
@@ -673,15 +361,10 @@ export default function OnlineResultsScreen() {
                     {oppAnswer?.word ? (
                       <View style={styles.answerContainer}>
                         <Text style={styles.answerWord}>{oppAnswer.word}</Text>
-                        {oppAnswer.is_valid ? (
+                        {oppAnswer.isValid ? (
                           <CheckCircle size={20} color="#4caf50" />
                         ) : (
-                          <View style={styles.contestRow}>
-                            <XCircle size={20} color="#f44336" />
-                            <TouchableOpacity onPress={() => handleContestWord(oppAnswer)}>
-                              <AlertCircle size={20} color="#FF9800" />
-                            </TouchableOpacity>
-                          </View>
+                          <XCircle size={20} color="#f44336" />
                         )}
                         <Text style={styles.pointsText}>+{oppAnswer.points}</Text>
                       </View>
@@ -693,118 +376,41 @@ export default function OnlineResultsScreen() {
               </Animated.View>
             );
           })}
-        </Animated.View>
+        </View>
 
-        <Animated.View 
-          entering={FadeInUp.delay(700)} 
-          style={styles.buttonContainer}
-        >
-          <Button 
-            title="Manche suivante" 
-            onPress={handleNextRound}
-            icon={<Play size={20} color="#fff" />}
-          />
-          <Button 
-            title="Arrêter" 
+        {opponentGone && (
+          <View style={styles.opponentGoneBanner}>
+            <Text style={styles.opponentGoneText}>
+              ⚠️ {opponentName} semble avoir quitté la partie.
+            </Text>
+          </View>
+        )}
+
+        <Animated.View entering={FadeInUp.delay(400)} style={styles.buttonContainer}>
+          <Button title="Manche suivante" onPress={handleNextRound} icon={<Play size={20} color="#fff" />} />
+          <Button
+            title="Arrêter la partie"
             onPress={handleStopGame}
             variant="secondary"
             icon={<StopCircle size={20} color="#007AFF" />}
           />
         </Animated.View>
       </ScrollView>
-
-      <Modal visible={showValidationModal} transparent={true} animationType="slide">
-        <View style={styles.modalOverlay}>
-          <Animated.View 
-            entering={ZoomIn.springify()} 
-            style={styles.modalContent}
-          >
-            <AlertCircle size={48} color="#FF9800" />
-            <Text style={styles.modalTitle}>Contester le mot</Text>
-            {contestedWord && (
-              <>
-                <Text style={styles.modalText}>
-                  <Text style={styles.modalWord}>{contestedWord.word}</Text>
-                </Text>
-                <Text style={styles.modalCategory}>
-                  {categories.find(c => c.id === contestedWord.categorie_id)?.nom}
-                </Text>
-                <Text style={styles.modalQuestion}>Ce mot est-il valide ?</Text>
-
-                {myVote !== null && (
-                  <View style={styles.voteStatusBadge}>
-                    <Text style={styles.voteStatus}>
-                      {myVote ? '✓ Valide' : '✗ Invalide'}
-                    </Text>
-                  </View>
-                )}
-
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity 
-                    style={[styles.modalButton, styles.rejectButton, myVote === false && styles.selectedButton]}
-                    onPress={() => handleVote(false)}
-                    disabled={myVote !== null}
-                  >
-                    <XCircle size={24} color="#fff" />
-                    <Text style={styles.modalButtonText}>Invalide</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={[styles.modalButton, styles.acceptButton, myVote === true && styles.selectedButton]}
-                    onPress={() => handleVote(true)}
-                    disabled={myVote !== null}
-                  >
-                    <CheckCircle size={24} color="#fff" />
-                    <Text style={styles.modalButtonText}>Valide</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <Button
-                  title="Annuler"
-                  onPress={() => setShowValidationModal(false)}
-                  variant="secondary"
-                />
-              </>
-            )}
-          </Animated.View>
-        </View>
-      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    backgroundColor: '#0a0e27' 
-  },
-  backgroundGradient: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#0a0e27',
-  },
-  scrollContent: { 
-    padding: 20, 
-    paddingTop: 60, 
-    paddingBottom: SAFE_AREA_HEIGHT 
-  },
-  roundHeader: { 
-    alignItems: 'center', 
+  container: { flex: 1, backgroundColor: '#0a0e27' },
+  scrollContent: { padding: 20, paddingTop: 60, paddingBottom: SAFE_AREA_HEIGHT },
+  roundHeader: {
+    alignItems: 'center',
     marginBottom: 24,
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 12,
   },
-  roundTitle: { 
-    fontSize: 32, 
-    fontWeight: '800', 
-    color: '#fff',
-    textShadowColor: 'rgba(0, 122, 255, 0.5)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 10,
-  },
+  roundTitle: { fontSize: 32, fontWeight: '800', color: '#fff' },
   letterBadge: {
     width: 50,
     height: 50,
@@ -815,23 +421,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  letterText: { 
-    fontSize: 24, 
-    fontWeight: '700',
-    color: '#FFD700',
-  },
+  letterText: { fontSize: 24, fontWeight: '700', color: '#FFD700' },
   scoreCard: {
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderRadius: 24,
     padding: 24,
-    marginBottom: 24,
+    marginBottom: 16,
     borderWidth: 1,
     borderColor: 'rgba(255, 215, 0, 0.3)',
-    shadowColor: '#FFD700',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 8,
   },
   scoreHeader: {
     flexDirection: 'row',
@@ -840,179 +437,126 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 20,
   },
-  scoreLabel: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-    letterSpacing: 0.5,
-  },
-  scoresRow: { 
-    flexDirection: 'row', 
-    gap: 16 
-  },
-  scoreBlock: { 
-    flex: 1, 
+  scoreLabel: { fontSize: 18, fontWeight: '600', color: '#fff' },
+  scoresRow: { flexDirection: 'row', gap: 16 },
+  scoreBlock: {
+    flex: 1,
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.03)',
     borderRadius: 16,
     padding: 16,
   },
-  playerLabel: { 
-    fontSize: 14, 
-    color: 'rgba(255, 255, 255, 0.6)', 
-    marginBottom: 8,
-    fontWeight: '500',
-  },
-  scoreValue: { 
-    fontSize: 48, 
-    fontWeight: '800', 
-    color: '#007AFF',
-    marginBottom: 8,
-    textShadowColor: 'rgba(0, 122, 255, 0.5)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 8,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 4,
-  },
-  validCount: { 
-    fontSize: 13, 
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontWeight: '500',
-  },
-  penaltyText: { 
-    fontSize: 12, 
-    color: '#f44336', 
-    marginTop: 6, 
+  playerLabel: { fontSize: 14, color: 'rgba(255, 255, 255, 0.6)', marginBottom: 8 },
+  scoreValue: { fontSize: 48, fontWeight: '800', color: '#007AFF', marginBottom: 8 },
+  statsRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  validCount: { fontSize: 13, color: 'rgba(255, 255, 255, 0.7)' },
+  penaltyText: {
+    fontSize: 12,
+    color: '#f44336',
+    marginTop: 6,
     fontWeight: '700',
     backgroundColor: 'rgba(244, 67, 54, 0.1)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
   },
-  comparisonContainer: { 
-    marginBottom: 24 
+  totalScoreCard: {
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 122, 255, 0.3)',
   },
-  sectionTitle: { 
-    fontSize: 20, 
-    fontWeight: '700', 
-    color: '#fff', 
-    marginBottom: 16, 
+  totalScoreLabel: { fontSize: 14, color: 'rgba(255, 255, 255, 0.6)', marginBottom: 8 },
+  totalScoreRow: { flexDirection: 'row', alignItems: 'center', gap: 24 },
+  totalScoreValue: { fontSize: 32, fontWeight: '800', color: '#007AFF' },
+  totalScoreSeparator: { fontSize: 24, color: 'rgba(255, 255, 255, 0.4)' },
+  comparisonContainer: { marginBottom: 24 },
+  comparisonLegend: {
+    flexDirection: 'row',
+    marginBottom: 8,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  legendText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.5)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
     textAlign: 'center',
-    letterSpacing: 0.5,
   },
-  comparisonCard: { 
-    backgroundColor: 'rgba(255, 255, 255, 0.05)', 
-    borderRadius: 16, 
-    padding: 16, 
+  opponentGoneBanner: {
+    backgroundColor: 'rgba(255, 152, 0, 0.1)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 152, 0, 0.3)',
+    padding: 12,
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#fff',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  comparisonCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    padding: 16,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  categoryName: { 
-    fontSize: 15, 
-    fontWeight: '600', 
-    color: '#fff', 
-    marginBottom: 12, 
+  categoryName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#fff',
+    marginBottom: 12,
     textAlign: 'center',
-    opacity: 0.9,
   },
-  comparisonRow: { 
-    flexDirection: 'row', 
-    gap: 12 
-  },
-  answerBlock: { 
-    flex: 1 
-  },
-  answerContainer: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    gap: 8, 
-    flexWrap: 'wrap',
+  comparisonRow: { flexDirection: 'row', gap: 12 },
+  answerBlock: { flex: 1 },
+  answerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     backgroundColor: 'rgba(255, 255, 255, 0.03)',
     padding: 8,
     borderRadius: 8,
   },
-  answerWord: { 
-    fontSize: 15, 
-    color: '#fff', 
-    fontWeight: '600', 
-    flex: 1 
-  },
-  noAnswer: { 
-    fontSize: 16, 
-    color: 'rgba(255, 255, 255, 0.3)', 
+  answerWord: { fontSize: 15, color: '#fff', fontWeight: '600', flex: 1 },
+  noAnswer: {
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.3)',
     fontStyle: 'italic',
     textAlign: 'center',
   },
-  contestRow: {
-    flexDirection: 'row',
-    gap: 4,
-  },
-  pointsText: { 
-    fontSize: 14, 
-    fontWeight: '700', 
+  pointsText: {
+    fontSize: 14,
+    fontWeight: '700',
     color: '#4caf50',
     backgroundColor: 'rgba(76, 175, 80, 0.1)',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
   },
-  buttonContainer: { 
-    gap: 12,
-    marginTop: 8,
-  },
-  winnerSection: { 
-    alignItems: 'center', 
-    marginBottom: 32,
-    position: 'relative',
-  },
-  confetti: {
-    position: 'absolute',
-    top: -20,
-    left: 0,
-    right: 0,
-  },
-  confettiText: {
-    fontSize: 32,
-    textAlign: 'center',
-  },
-  winnerText: { 
-    fontSize: 36, 
-    fontWeight: '800', 
-    color: '#4caf50', 
-    marginTop: 20,
-    textShadowColor: 'rgba(76, 175, 80, 0.5)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 10,
-  },
-  loserText: { 
-    fontSize: 32, 
-    fontWeight: '700', 
-    color: 'rgba(255, 255, 255, 0.6)', 
-    marginTop: 16 
-  },
-  winnerName: { 
-    fontSize: 20, 
-    color: '#007AFF', 
-    marginTop: 8,
-    fontWeight: '600',
-  },
-  finalScoresCard: { 
-    backgroundColor: 'rgba(0, 122, 255, 0.1)', 
-    borderRadius: 24, 
-    padding: 24, 
+  buttonContainer: { gap: 12, marginTop: 8 },
+  winnerSection: { alignItems: 'center', marginBottom: 32 },
+  winnerText: { fontSize: 36, fontWeight: '800', color: '#4caf50', marginTop: 20 },
+  loserText: { fontSize: 32, fontWeight: '700', color: 'rgba(255, 255, 255, 0.6)', marginTop: 16 },
+  winnerName: { fontSize: 20, color: '#007AFF', marginTop: 8 },
+  finalScoresCard: {
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    borderRadius: 24,
+    padding: 24,
     marginBottom: 24,
     borderWidth: 2,
     borderColor: 'rgba(0, 122, 255, 0.3)',
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 8,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -1021,45 +565,27 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 20,
   },
-  finalScoresRow: { 
-    flexDirection: 'row', 
-    gap: 16 
-  },
-  finalScoreBlock: { 
-    flex: 1, 
-    alignItems: 'center', 
-    padding: 20, 
-    backgroundColor: 'rgba(255, 255, 255, 0.05)', 
+  finalScoresRow: { flexDirection: 'row', gap: 16 },
+  finalScoreBlock: {
+    flex: 1,
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderRadius: 16,
     borderWidth: 2,
     borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  winnerBlock: { 
-    backgroundColor: 'rgba(76, 175, 80, 0.15)', 
-    borderWidth: 2, 
+  winnerBlock: {
+    backgroundColor: 'rgba(76, 175, 80, 0.15)',
+    borderWidth: 2,
     borderColor: '#4caf50',
-    shadowColor: '#4caf50',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    elevation: 8,
   },
-  finalScoreValue: { 
-    fontSize: 52, 
-    fontWeight: '800', 
-    color: '#007AFF', 
-    marginBottom: 8,
-    textShadowColor: 'rgba(0, 122, 255, 0.5)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 10,
-  },
-  historyContainer: { 
-    marginBottom: 24 
-  },
-  historyCard: { 
-    backgroundColor: 'rgba(255, 255, 255, 0.05)', 
-    borderRadius: 16, 
-    padding: 16, 
+  finalScoreValue: { fontSize: 52, fontWeight: '800', color: '#007AFF', marginBottom: 8 },
+  historyContainer: { marginBottom: 24 },
+  historyCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    padding: 16,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)',
@@ -1070,140 +596,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
-  historyRound: { 
-    fontSize: 16, 
-    fontWeight: '600', 
-    color: '#fff',
-  },
-  historyScores: { 
-    flexDirection: 'row', 
+  historyRound: { fontSize: 16, fontWeight: '600', color: '#fff' },
+  historyScores: {
+    flexDirection: 'row',
     justifyContent: 'space-between',
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: 'rgba(255, 255, 255, 0.1)',
   },
-  historyScore: { 
-    fontSize: 14, 
+  historyScore: { fontSize: 14, color: 'rgba(255, 255, 255, 0.7)' },
+  waitingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
+  waitingActions: { marginTop: 32, gap: 12, alignSelf: 'stretch' },
+  opponentGoneText: {
+    fontSize: 14,
+    color: '#ff9800',
+    textAlign: 'center',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  waitingTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#fff',
+    marginTop: 24,
+    textAlign: 'center',
+  },
+  waitingText: {
+    fontSize: 16,
     color: 'rgba(255, 255, 255, 0.7)',
-    fontWeight: '500',
-  },
-  modalOverlay: { 
-    flex: 1, 
-    backgroundColor: 'rgba(0,0,0,0.8)', 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    padding: 20 
-  },
-  modalContent: { 
-    backgroundColor: '#1a1f3a', 
-    borderRadius: 24, 
-    padding: 28, 
-    width: '100%', 
-    maxWidth: 400, 
-    alignItems: 'center', 
-    gap: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 152, 0, 0.3)',
-    shadowColor: '#FF9800',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 10,
-  },
-  modalTitle: { 
-    fontSize: 24, 
-    fontWeight: '800', 
-    color: '#fff',
-    letterSpacing: 0.5,
-  },
-  modalText: { 
-    fontSize: 18, 
-    color: '#fff', 
+    marginTop: 12,
     textAlign: 'center',
-    fontWeight: '500',
-  },
-  modalWord: { 
-    fontWeight: '800', 
-    color: '#007AFF',
-    fontSize: 20,
-  },
-  modalCategory: { 
-    fontSize: 14, 
-    color: 'rgba(255, 255, 255, 0.6)',
-    fontWeight: '500',
-  },
-  modalQuestion: { 
-    fontSize: 18, 
-    fontWeight: '700', 
-    color: '#fff',
-    marginTop: 8,
-  },
-  voteStatusBadge: {
-    backgroundColor: 'rgba(76, 175, 80, 0.2)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#4caf50',
-  },
-  voteStatus: { 
-    fontSize: 16, 
-    fontWeight: '700', 
-    color: '#4caf50' 
-  },
-  modalButtons: { 
-    flexDirection: 'row', 
-    gap: 12, 
-    width: '100%',
-    marginTop: 8,
-  },
-  modalButton: { 
-    flex: 1, 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    gap: 8, 
-    padding: 16, 
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  acceptButton: { 
-    backgroundColor: '#4caf50' 
-  },
-  rejectButton: { 
-    backgroundColor: '#f44336' 
-  },
-  selectedButton: { 
-    opacity: 0.5 
-  },
-  modalButtonText: { 
-    fontSize: 16, 
-    fontWeight: '700', 
-    color: '#fff' 
-  },
-  waitingContainer: { 
-    flex: 1, 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    padding: 40 
-  },
-  waitingTitle: { 
-    fontSize: 26, 
-    fontWeight: '800', 
-    color: '#fff', 
-    marginTop: 24, 
-    textAlign: 'center',
-    letterSpacing: 0.5,
-  },
-  waitingText: { 
-    fontSize: 16, 
-    color: 'rgba(255, 255, 255, 0.7)', 
-    marginTop: 12, 
-    textAlign: 'center',
-    fontWeight: '500',
   },
 });

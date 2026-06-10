@@ -67,6 +67,8 @@ export const useUserStore = create<UserState>((set, get) => ({
         isAuthenticated: false,
         needsUsername: false,
       });
+      // Ne pas propager l'erreur pour permettre à l'app de fonctionner
+      // L'erreur sera affichée via Alert dans l'écran principal
       throw error;
     }
   },

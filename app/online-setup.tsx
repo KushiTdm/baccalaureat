@@ -1,9 +1,10 @@
 // app/online-setup.tsx - VERSION COMPLÈTE avec username automatique
 import { View, Text, StyleSheet, TextInput, ScrollView, Alert, ActivityIndicator, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Button from '../components/Button';
 import { onlineService, GameRoom, GameRoomPlayer } from '../services/online';
+import { websocketService } from '../services/websocket';
 import { useGameStore } from '../store/gameStore';
 import { useUserStore } from '../store/userStore'; // ✅ AJOUTÉ
 import { getCategories } from '../services/api';
@@ -49,6 +50,12 @@ export default function OnlineSetupScreen() {
   } | null>(null);
   const [players, setPlayers] = useState<GameRoomPlayer[]>([]);
 
+  // Le polling de la salle d'attente DOIT être arrêté quand on quitte
+  // l'écran/la salle, sinon il continue en arrière-plan et peut nous
+  // auto-démarrer dans la partie d'autres joueurs.
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startingRef = useRef(false);
+
   // ✅ Initialiser le nom avec le username de l'utilisateur
   useEffect(() => {
     if (user?.username) {
@@ -58,7 +65,7 @@ export default function OnlineSetupScreen() {
 
   useEffect(() => {
     loadAvailableRooms();
-    
+
     rotateAnim.value = withRepeat(
       withTiming(360, { duration: 20000 }),
       -1,
@@ -66,8 +73,16 @@ export default function OnlineSetupScreen() {
     );
   }, []);
 
+  function stopPolling() {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }
+
   useEffect(() => {
     if (waitingRoom) {
+      startingRef.current = false;
       pulseAnim.value = withRepeat(
         withSequence(
           withSpring(1.05, { damping: 2 }),
@@ -76,13 +91,15 @@ export default function OnlineSetupScreen() {
         -1,
         true
       );
-      
+
       loadPlayersAndWatch();
     }
 
     return () => {
+      stopPolling();
       onlineService.unsubscribeFromRoom();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waitingRoom]);
 
   async function loadAvailableRooms() {
@@ -135,19 +152,31 @@ export default function OnlineSetupScreen() {
         return;
       }
 
-      const interval = setInterval(async () => {
-        const updatedPlayers = await onlineService.getPlayers(waitingRoom.roomId);
-        setPlayers(updatedPlayers);
+      stopPolling();
+      pollIntervalRef.current = setInterval(async () => {
+        try {
+          // L'hôte a pu fermer la salle pendant qu'on attendait
+          const room = await onlineService.getRoom(waitingRoom.roomId);
+          if (!room) {
+            stopPolling();
+            setWaitingRoom(null);
+            setPlayers([]);
+            loadAvailableRooms();
+            Alert.alert('Salle fermée', "L'hôte a quitté la salle.");
+            return;
+          }
 
-        if (updatedPlayers.length >= 2) {
-          clearInterval(interval);
-          await handleAutoStart();
+          const updatedPlayers = await onlineService.getPlayers(waitingRoom.roomId);
+          setPlayers(updatedPlayers);
+
+          if (updatedPlayers.length >= 2) {
+            stopPolling();
+            await handleAutoStart();
+          }
+        } catch (pollError) {
+          console.error('Polling error:', pollError);
         }
       }, 1000);
-
-      return () => {
-        clearInterval(interval);
-      };
     } catch (error) {
       console.error('Error loading players:', error);
       Alert.alert('Erreur', 'Impossible de charger les joueurs');
@@ -156,11 +185,15 @@ export default function OnlineSetupScreen() {
 
   async function handleAutoStart() {
     if (!waitingRoom) return;
+    // Garde anti double-démarrage (poll + appel direct)
+    if (startingRef.current) return;
+    startingRef.current = true;
 
     try {
       const currentPlayers = await onlineService.getPlayers(waitingRoom.roomId);
 
       if (currentPlayers.length < 2) {
+        startingRef.current = false;
         Alert.alert('Erreur', 'Pas assez de joueurs');
         return;
       }
@@ -168,6 +201,7 @@ export default function OnlineSetupScreen() {
       const opponent = currentPlayers.find(p => p.id !== waitingRoom.playerId);
 
       if (!opponent) {
+        startingRef.current = false;
         Alert.alert('Erreur', 'Adversaire introuvable');
         return;
       }
@@ -176,9 +210,50 @@ export default function OnlineSetupScreen() {
         await onlineService.startGame(waitingRoom.roomId);
       }
 
-      await new Promise(resolve => setTimeout(resolve, 500));
-
       const categories = await getCategories();
+
+      // --- Bascule sur le serveur temps réel socket.io pour le gameplay ---
+      // (Supabase n'a servi que pour le matchmaking ; le STOP simultané et le
+      // scoring passent par socket.io, room = room_code partagé.)
+      const me = currentPlayers.find(p => p.id === waitingRoom.playerId);
+      const myName = me?.player_name || user?.username || playerName || 'Joueur';
+
+      try {
+        await websocketService.connect();
+        websocketService.setPlayerInfo(waitingRoom.playerId, myName);
+
+        // Enregistré AVANT joinRoom : game-started peut arriver pendant la
+        // navigation (écran de jeu pas encore monté). Ce handler n'agit que
+        // sur le store → l'horloge est synchronisée quoi qu'il arrive.
+        websocketService.clearCallbacks();
+        websocketService.setCallbacks({
+          onGameStarted: (data) => {
+            const s = useGameStore.getState();
+            if (data.letter) s.setLetter(data.letter);
+            if (data.roundNumber) useGameStore.setState({ currentRound: data.roundNumber });
+            const elapsedSec = data.startedAt
+              ? Math.max(0, (data.timestamp - data.startedAt) / 1000)
+              : 0;
+            s.syncRoundClock(data.roundDuration || 120, elapsedSec);
+          },
+        });
+
+        websocketService.joinRoom(waitingRoom.roomCode, waitingRoom.playerId, myName);
+
+        // L'hôte déclenche la 1re manche ; si l'invité n'est pas encore
+        // connecté, le serveur diffère le démarrage (pendingStart)
+        if (waitingRoom.isHost) {
+          websocketService.startGame(waitingRoom.letter, 120);
+        }
+      } catch (wsError) {
+        console.error('Erreur connexion temps réel:', wsError);
+        startingRef.current = false;
+        Alert.alert(
+          'Erreur',
+          'Connexion au serveur temps réel impossible. Vérifiez que le serveur WebSocket est démarré (et EXPO_PUBLIC_WS_URL si vous êtes sur un appareil physique).'
+        );
+        return;
+      }
 
       startMultiplayerGame(
         waitingRoom.letter,
@@ -190,6 +265,7 @@ export default function OnlineSetupScreen() {
       router.push('/online-game');
     } catch (error) {
       console.error('Error starting game:', error);
+      startingRef.current = false;
       Alert.alert('Erreur', 'Impossible de démarrer la partie: ' + (error as Error).message);
     }
   }

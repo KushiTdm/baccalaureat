@@ -35,7 +35,12 @@ type GameState = {
   score: number;
   isPlaying: boolean;
   timeRemaining: number;
-  
+  // Horloge de manche : timestamp (ms, horloge locale) de fin de manche.
+  // Le Timer recalcule le temps restant à partir de cette valeur, ce qui le
+  // rend insensible aux re-renders et permet la resynchro serveur (catch-up).
+  roundEndsAt: number | null;
+  roundDurationSec: number;
+
   // Multiplayer state
   isMultiplayer: boolean;
   isHost: boolean;
@@ -57,6 +62,7 @@ type GameState = {
   setAnswer: (categorieId: number, word: string) => void;
   setResults: (results: GameResult[]) => void;
   setScore: (score: number) => void;
+  setIsHost: (isHost: boolean) => void;
   startGame: (letter: string, categories: Categorie[]) => void;
   startMultiplayerGame: (letter: string, categories: Categorie[], isHost: boolean, opponentName: string) => void;
   setMultiplayerResults: (myResults: GameResult[], myScore: number, stoppedEarly?: boolean) => void;
@@ -64,9 +70,11 @@ type GameState = {
   endGame: () => void;
   resetGame: () => void;
   setTimeRemaining: (time: number | ((prev: number) => number)) => void;
-  
+  // Synchronise l'horloge de manche sur la durée/temps écoulé serveur
+  syncRoundClock: (durationSec: number, elapsedSec?: number) => void;
+
   // Round system actions
-  startNewRound: (letter: string) => void;
+  startNewRound: (letter: string, roundNumber?: number) => void;
   addRoundToHistory: (round: RoundHistory) => void;
   setStoppedEarly: (stopped: boolean) => void;
   setEndGameRequested: (requested: boolean) => void;
@@ -82,7 +90,9 @@ export const useGameStore = create<GameState>((set) => ({
   score: 0,
   isPlaying: false,
   timeRemaining: 120,
-  
+  roundEndsAt: null,
+  roundDurationSec: 120,
+
   // Multiplayer state
   isMultiplayer: false,
   isHost: false,
@@ -129,6 +139,8 @@ export const useGameStore = create<GameState>((set) => ({
 
   setScore: (score) => set({ score }),
 
+  setIsHost: (isHost) => set({ isHost }),
+
   startGame: (letter, categories) =>
     set({
       currentLetter: letter,
@@ -138,6 +150,8 @@ export const useGameStore = create<GameState>((set) => ({
       score: 0,
       isPlaying: true,
       timeRemaining: 120,
+      roundEndsAt: Date.now() + 120_000,
+      roundDurationSec: 120,
       isMultiplayer: false,
       isHost: false,
       opponentName: null,
@@ -161,6 +175,8 @@ export const useGameStore = create<GameState>((set) => ({
       score: 0,
       isPlaying: true,
       timeRemaining: 120,
+      roundEndsAt: Date.now() + 120_000,
+      roundDurationSec: 120,
       isMultiplayer: true,
       isHost,
       opponentName,
@@ -188,7 +204,7 @@ export const useGameStore = create<GameState>((set) => ({
       opponentScore: score,
     }),
 
-  endGame: () => set({ isPlaying: false }),
+  endGame: () => set({ isPlaying: false, roundEndsAt: null }),
 
   resetGame: () =>
     set({
@@ -199,6 +215,7 @@ export const useGameStore = create<GameState>((set) => ({
       score: 0,
       isPlaying: false,
       timeRemaining: 120,
+      roundEndsAt: null,
       isMultiplayer: false,
       isHost: false,
       opponentName: null,
@@ -213,21 +230,34 @@ export const useGameStore = create<GameState>((set) => ({
       endGameRequestReceived: false,
     }),
 
-  setTimeRemaining: (timeOrFn) => 
-    set((state) => ({ 
-      timeRemaining: typeof timeOrFn === 'function' ? timeOrFn(state.timeRemaining) : timeOrFn 
+  setTimeRemaining: (timeOrFn) =>
+    set((state) => ({
+      timeRemaining: typeof timeOrFn === 'function' ? timeOrFn(state.timeRemaining) : timeOrFn
     })),
 
+  syncRoundClock: (durationSec, elapsedSec = 0) => {
+    const remaining = Math.max(0, durationSec - elapsedSec);
+    set({
+      timeRemaining: Math.ceil(remaining),
+      roundEndsAt: Date.now() + remaining * 1000,
+      roundDurationSec: durationSec,
+    });
+  },
+
   // Round system actions
-  startNewRound: (letter) =>
+  startNewRound: (letter, roundNumber) =>
     set((state) => ({
       currentLetter: letter,
-      currentRound: state.currentRound + 1,
+      // Le numéro de manche serveur fait foi (évite la dérive si un client
+      // a raté un événement) ; fallback : incrément local.
+      currentRound: roundNumber ?? state.currentRound + 1,
       answers: [],
       results: null,
       score: 0,
       isPlaying: true,
       timeRemaining: 120,
+      roundEndsAt: Date.now() + 120_000,
+      roundDurationSec: 120,
       stoppedEarly: false,
       endGameRequested: false,
       endGameRequestReceived: false,
