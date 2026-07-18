@@ -23,6 +23,7 @@ type UserState = {
   
   // Actions
   login: () => Promise<void>;
+  loginOffline: () => Promise<void>;
   setUsername: (username: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -61,7 +62,26 @@ export const useUserStore = create<UserState>((set, get) => ({
       });
     } catch (error: any) {
       console.error('❌ Erreur lors de la connexion:', error);
-      set({ 
+
+      // Fallback hors ligne : créer ou recharger un utilisateur local
+      // persisté pour que l'app reste utilisable sans Supabase.
+      // Au prochain démarrage avec réseau, le login normal reprend
+      // (le user local est stocké sous une clé séparée et n'écrase rien).
+      try {
+        const localUser = await authService.createOrLoadLocalUser();
+        console.log('📴 Mode hors ligne : utilisateur local actif');
+        set({
+          user: localUser,
+          isAuthenticated: true,
+          needsUsername: !localUser.has_set_username,
+          isLoading: false,
+        });
+        return;
+      } catch (fallbackError) {
+        console.error('❌ Fallback utilisateur local impossible:', fallbackError);
+      }
+
+      set({
         isLoading: false,
         user: null,
         isAuthenticated: false,
@@ -74,11 +94,52 @@ export const useUserStore = create<UserState>((set, get) => ({
   },
 
   /**
+   * Entrée explicite en mode hors ligne (bouton « Continuer hors ligne »)
+   */
+  loginOffline: async () => {
+    if (!authService) {
+      throw new Error('authService non disponible');
+    }
+
+    try {
+      set({ isLoading: true });
+      const localUser = await authService.createOrLoadLocalUser();
+      console.log('📴 Connexion hors ligne:', localUser.username || 'Joueur');
+      set({
+        user: localUser,
+        isAuthenticated: true,
+        needsUsername: !localUser.has_set_username,
+        isLoading: false,
+      });
+    } catch (error: any) {
+      console.error('❌ Erreur loginOffline:', error);
+      set({ isLoading: false });
+      throw error;
+    }
+  },
+
+  /**
    * Définir ou modifier le pseudo
    */
   setUsername: async (username: string) => {
     if (!authService) {
       throw new Error('authService non disponible');
+    }
+
+    // Utilisateur local hors ligne : mise à jour purement locale,
+    // aucun appel Supabase.
+    if (get().user?.is_local) {
+      try {
+        const updatedUser = await authService.setLocalUsername(username);
+        set({
+          user: updatedUser,
+          needsUsername: false,
+        });
+        return;
+      } catch (error: any) {
+        console.error('❌ Erreur lors de la mise à jour du pseudo local:', error);
+        throw error;
+      }
     }
 
     try {
@@ -109,6 +170,22 @@ export const useUserStore = create<UserState>((set, get) => ({
       return;
     }
 
+    // Utilisateur local : on supprime simplement le profil local,
+    // sans appel Supabase.
+    if (get().user?.is_local) {
+      try {
+        await authService.clearLocalUser();
+      } catch (error) {
+        console.error('❌ Erreur lors de la suppression du profil local:', error);
+      }
+      set({
+        user: null,
+        isAuthenticated: false,
+        needsUsername: false,
+      });
+      return;
+    }
+
     try {
       console.log('👋 Déconnexion...');
       await authService.logout();
@@ -129,6 +206,11 @@ export const useUserStore = create<UserState>((set, get) => ({
    */
   refreshUser: async () => {
     if (!authService) {
+      return;
+    }
+
+    // Ne pas écraser une session locale hors ligne par un appel réseau
+    if (get().user?.is_local) {
       return;
     }
 

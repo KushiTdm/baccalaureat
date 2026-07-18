@@ -1,22 +1,43 @@
 //app/results.tsx
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import Animated, { FadeInDown, FadeInUp, BounceIn } from 'react-native-reanimated';
 import { useGameStore } from '../store/gameStore';
 import Button from '../components/Button';
-import { CheckCircle, XCircle, Trophy, RotateCcw } from 'lucide-react-native';
-import { colors, radius, spacing, shadow } from '../constants/theme';
+import AdBanner from '../components/AdBanner';
+import { maybeShowInterstitial } from '../services/ads';
+import { feedback } from '../services/feedback';
+import { pickRandomLetter } from '../utils/letters';
+import { useSettingsStore } from '../store/settingsStore';
+import { CheckCircle, XCircle, Trophy, RotateCcw, Home } from 'lucide-react-native';
+import { colors, fonts, radius, spacing, shadow } from '../constants/theme';
 
 export default function ResultsScreen() {
   const router = useRouter();
-  const { results, score, resetGame } = useGameStore();
+  const { results, score, resetGame, categories, currentLetter, startGame } = useGameStore();
 
+  // startGame() vide `results` pendant qu'on relance : le garde évite que
+  // cet effet ne redirige vers l'accueil en pleine navigation vers /game.
+  const replayingRef = useRef(false);
   useEffect(() => {
-    if (!results) {
+    if (!results && !replayingRef.current) {
       router.replace('/');
     }
   }, [results, router]);
+
+  // Partie terminée → son/vibration + interstitiel éventuel (toutes les 2-3 parties)
+  useEffect(() => {
+    if (results) {
+      if (score > 0) {
+        feedback.victory();
+      } else {
+        feedback.defeat();
+      }
+      maybeShowInterstitial();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!results) {
     return null;
@@ -25,7 +46,20 @@ export default function ResultsScreen() {
   const validAnswers = results.filter((r) => r.isValid).length;
   const totalAnswers = results.filter((r) => r.word.trim() !== '').length;
 
+  // Relance directement une manche : nouvelle lettre, mêmes catégories
   function handlePlayAgain() {
+    if (categories.length === 0) {
+      resetGame();
+      router.replace('/');
+      return;
+    }
+    replayingRef.current = true;
+    const newLetter = pickRandomLetter(currentLetter ? [currentLetter] : []);
+    startGame(newLetter, categories, useSettingsStore.getState().roundDurationSec);
+    router.replace('/game');
+  }
+
+  function handleGoHome() {
     resetGame();
     router.replace('/');
   }
@@ -33,6 +67,7 @@ export default function ResultsScreen() {
   return (
     <View style={styles.container}>
       <ScrollView
+        style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
@@ -94,12 +129,20 @@ export default function ResultsScreen() {
 
         <Animated.View entering={FadeInUp.delay(400)} style={styles.buttonContainer}>
           <Button
-            title="Nouvelle partie"
+            title="Rejouer"
             onPress={handlePlayAgain}
-            icon={<RotateCcw size={20} color="#fff" />}
+            icon={<RotateCcw size={20} color={colors.onPrimary} />}
+          />
+          <Button
+            title="Accueil"
+            onPress={handleGoHome}
+            variant="secondary"
+            icon={<Home size={20} color={colors.primary} />}
           />
         </Animated.View>
       </ScrollView>
+
+      <AdBanner />
     </View>
   );
 }
@@ -108,6 +151,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
+  },
+  scrollView: {
+    flex: 1,
   },
   scrollContent: {
     padding: spacing.xl,
@@ -131,15 +177,13 @@ const styles = StyleSheet.create({
     ...shadow.glow(colors.gold),
   },
   title: {
-    fontSize: 34,
-    fontWeight: '800',
+    fontSize: 32,
+    fontFamily: fonts.display,
     color: colors.text,
     marginBottom: spacing.xl,
   },
   scoreContainer: {
-    backgroundColor: colors.primarySoft,
-    borderWidth: 1,
-    borderColor: colors.primaryBorder,
+    backgroundColor: colors.surface,
     paddingVertical: spacing.lg,
     paddingHorizontal: 44,
     borderRadius: radius.lg,
@@ -156,9 +200,9 @@ const styles = StyleSheet.create({
   },
   score: {
     fontSize: 56,
-    fontWeight: '800',
+    fontFamily: fonts.displayBold,
     color: colors.primary,
-    lineHeight: 64,
+    lineHeight: 66,
   },
   scoreUnit: {
     fontSize: 14,
@@ -173,13 +217,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
     borderRadius: radius.full,
-    borderWidth: 1,
-    borderColor: colors.successBorder,
   },
   stats: {
     fontSize: 14,
-    color: colors.textSecondary,
-    fontWeight: '600',
+    color: colors.success,
+    fontWeight: '700',
   },
   resultsContainer: {
     gap: spacing.md,
@@ -187,14 +229,14 @@ const styles = StyleSheet.create({
   },
   resultCard: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    ...shadow.card,
   },
   resultCardValid: {
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successSoft,
+    borderColor: colors.successSoft,
   },
   resultCardInvalid: {
     borderColor: colors.dangerBorder,
@@ -223,14 +265,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   points: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '700',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 8,
+    overflow: 'hidden',
   },
   validPoints: {
     color: colors.success,
+    backgroundColor: colors.successSoft,
   },
   invalidPoints: {
     color: colors.danger,
+    backgroundColor: colors.dangerSoft,
   },
   noAnswer: {
     fontSize: 14,
@@ -239,5 +287,6 @@ const styles = StyleSheet.create({
   },
   buttonContainer: {
     marginTop: spacing.sm,
+    gap: spacing.md,
   },
 });

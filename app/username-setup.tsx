@@ -17,6 +17,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import { User, Sparkles } from 'lucide-react-native';
 import { useEffect } from 'react';
+import { LinearGradient } from 'expo-linear-gradient';
+import { colors, gradients, fonts, radius, spacing, shadow } from '../constants/theme';
 
 export default function UsernameSetupScreen() {
   const router = useRouter();
@@ -80,10 +82,17 @@ export default function UsernameSetupScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <Animated.View 
+      <Animated.View
         entering={FadeIn.duration(800)}
         style={styles.backgroundGradient}
-      />
+      >
+        <LinearGradient
+          colors={gradients.onboarding}
+          start={{ x: 0.1, y: 0 }}
+          end={{ x: 0.7, y: 1 }}
+          style={styles.gradientFill}
+        />
+      </Animated.View>
 
       <View style={styles.content}>
         {/* Icône et titre */}
@@ -92,12 +101,12 @@ export default function UsernameSetupScreen() {
           style={styles.header}
         >
           <Animated.View style={[styles.iconContainer, animatedTitleStyle]}>
-            <User size={64} color="#007AFF" />
-            <Animated.View 
+            <User size={64} color={colors.primary} />
+            <Animated.View
               entering={BounceIn.delay(600)}
               style={styles.sparkleIcon}
             >
-              <Sparkles size={24} color="#FFD700" />
+              <Sparkles size={24} color={colors.gold} />
             </Animated.View>
           </Animated.View>
 
@@ -119,7 +128,7 @@ export default function UsernameSetupScreen() {
             value={username}
             onChangeText={setUsernameInput}
             placeholder="Ex: JoueurPro42"
-            placeholderTextColor="rgba(255, 255, 255, 0.4)"
+            placeholderTextColor={colors.textMuted}
             maxLength={20}
             autoCapitalize="none"
             autoCorrect={false}
@@ -142,6 +151,7 @@ export default function UsernameSetupScreen() {
           <Button
             title={loading ? 'Création...' : 'Commencer à jouer'}
             onPress={handleSubmit}
+            variant="secondary"
             loading={loading}
             disabled={!username.trim() || username.trim().length < 3}
           />
@@ -162,9 +172,10 @@ export default function UsernameSetupScreen() {
 }
 
 const styles = StyleSheet.create({
+  // Écran onboarding du design : plein écran dégradé indigo
   container: {
     flex: 1,
-    backgroundColor: '#0a0e27',
+    backgroundColor: colors.primary,
   },
   backgroundGradient: {
     position: 'absolute',
@@ -172,7 +183,9 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#0a0e27',
+  },
+  gradientFill: {
+    flex: 1,
   },
   content: {
     flex: 1,
@@ -183,62 +196,57 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 48,
   },
+  // Tuile logo blanche du design (lettre/icône indigo)
   iconContainer: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    width: 112,
+    height: 112,
+    borderRadius: 30,
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
-    borderWidth: 3,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
     position: 'relative',
+    ...shadow.card,
   },
   sparkleIcon: {
     position: 'absolute',
-    top: 0,
-    right: 0,
+    top: -6,
+    right: -6,
   },
   title: {
-    fontSize: 36,
-    fontWeight: '900',
-    color: '#fff',
+    fontSize: 38,
+    fontFamily: fonts.displayBold,
+    color: colors.onPrimary,
     marginBottom: 12,
-    textShadowColor: 'rgba(0, 122, 255, 0.5)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 10,
+    letterSpacing: -0.5,
   },
   subtitle: {
-    fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 17,
+    color: colors.onPrimarySecondary,
     textAlign: 'center',
     paddingHorizontal: 32,
-    lineHeight: 24,
+    lineHeight: 25,
   },
   formCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 20,
+    backgroundColor: colors.onPrimarySurface,
+    borderRadius: radius.xl,
     padding: 24,
     marginBottom: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   label: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
-    color: 'rgba(255, 255, 255, 0.8)',
+    color: colors.onPrimarySecondary,
     marginBottom: 12,
     letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
   input: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 14,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
     padding: 16,
     fontSize: 18,
-    color: '#fff',
-    borderWidth: 2,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
+    color: colors.text,
     fontWeight: '600',
   },
   hints: {
@@ -247,22 +255,20 @@ const styles = StyleSheet.create({
   },
   hintText: {
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.5)',
+    color: colors.onPrimaryMuted,
     lineHeight: 18,
   },
   buttonContainer: {
     marginBottom: 24,
   },
   infoCard: {
-    backgroundColor: 'rgba(0, 122, 255, 0.08)',
-    borderRadius: 14,
+    backgroundColor: colors.onPrimarySurface,
+    borderRadius: radius.md,
     padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.2)',
   },
   infoText: {
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: colors.onPrimarySecondary,
     textAlign: 'center',
     lineHeight: 20,
   },

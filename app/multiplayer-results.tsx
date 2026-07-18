@@ -9,10 +9,11 @@ import { GameResult, RoundHistory } from '../store/gameStore';
 import { getCategories } from '../services/api';
 import { CheckCircle, XCircle, Trophy, Crown, Play, StopCircle, Star, Award, Zap } from 'lucide-react-native';
 
+import { pickRandomLetter } from '../utils/letters';
+import { colors, fonts, radius, spacing, shadow } from '../constants/theme';
+
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SAFE_AREA_HEIGHT = SCREEN_HEIGHT * 0.25;
-
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 export default function MultiplayerResultsScreen() {
   const router = useRouter();
@@ -119,12 +120,7 @@ export default function MultiplayerResultsScreen() {
 
   // Générer une nouvelle lettre
   const getNewLetter = () => {
-    const usedLetters = roundHistory.map(r => r.letter);
-    const availableLetters = LETTERS.filter(l => !usedLetters.includes(l));
-    if (availableLetters.length === 0) {
-      return LETTERS[Math.floor(Math.random() * LETTERS.length)];
-    }
-    return availableLetters[Math.floor(Math.random() * availableLetters.length)];
+    return pickRandomLetter(roundHistory.map(r => r.letter));
   };
 
   // Démarrer la manche suivante
@@ -221,17 +217,17 @@ export default function MultiplayerResultsScreen() {
           <View style={styles.winnerSection}>
             {isDraw ? (
               <>
-                <Trophy size={80} color="#FFD700" />
+                <Trophy size={80} color={colors.gold} />
                 <Text style={styles.winnerText}>Égalité ! 🤝</Text>
               </>
             ) : isWinner ? (
               <>
-                <Crown size={80} color="#FFD700" />
+                <Crown size={80} color={colors.gold} />
                 <Text style={styles.winnerText}>Victoire ! 🎉</Text>
               </>
             ) : (
               <>
-                <Trophy size={80} color="#999" />
+                <Trophy size={80} color={colors.textMuted} />
                 <Text style={styles.loserText}>Défaite</Text>
                 <Text style={styles.winnerName}>{opponentName} gagne !</Text>
               </>
@@ -240,7 +236,7 @@ export default function MultiplayerResultsScreen() {
 
           <View style={styles.finalScoresCard}>
             <View style={styles.cardHeader}>
-              <Award size={24} color="#007AFF" />
+              <Award size={24} color={colors.primary} />
               <Text style={styles.sectionTitle}>Score final</Text>
             </View>
             
@@ -249,7 +245,7 @@ export default function MultiplayerResultsScreen() {
                 <Text style={styles.playerLabel}>Vous</Text>
                 <Text style={styles.finalScoreValue}>{myTotalScore}</Text>
                 <View style={styles.statsRow}>
-                  <Star size={16} color="#FFD700" />
+                  <Star size={16} color={colors.gold} />
                   <Text style={styles.validCount}>
                     {roundHistory.reduce((sum, r) => sum + r.myValidWords, 0)} mots valides
                   </Text>
@@ -260,7 +256,7 @@ export default function MultiplayerResultsScreen() {
                 <Text style={styles.playerLabel}>{opponentName}</Text>
                 <Text style={styles.finalScoreValue}>{opponentTotal}</Text>
                 <View style={styles.statsRow}>
-                  <Star size={16} color="#FFD700" />
+                  <Star size={16} color={colors.gold} />
                   <Text style={styles.validCount}>
                     {roundHistory.reduce((sum, r) => sum + r.opponentValidWords, 0)} mots valides
                   </Text>
@@ -328,7 +324,7 @@ export default function MultiplayerResultsScreen() {
 
         <View style={styles.scoreCard}>
           <View style={styles.scoreHeader}>
-            <Zap size={24} color="#FFD700" />
+            <Zap size={24} color={colors.gold} />
             <Text style={styles.scoreLabel}>Score de la manche</Text>
           </View>
           
@@ -337,7 +333,7 @@ export default function MultiplayerResultsScreen() {
               <Text style={styles.playerLabel}>Vous</Text>
               <Text style={styles.scoreValue}>{myFinalScore}</Text>
               <View style={styles.statsRow}>
-                <CheckCircle size={16} color="#4caf50" />
+                <CheckCircle size={16} color={colors.success} />
                 <Text style={styles.validCount}>{results.filter(r => r.isValid).length} valides</Text>
               </View>
               {stoppedEarly && results.some(r => r.word && !r.isValid) && (
@@ -353,7 +349,7 @@ export default function MultiplayerResultsScreen() {
               {!loading && (
                 <>
                   <View style={styles.statsRow}>
-                    <CheckCircle size={16} color="#4caf50" />
+                    <CheckCircle size={16} color={colors.success} />
                     <Text style={styles.validCount}>
                       {opponentResults.filter(r => r.isValid).length} valides
                     </Text>
@@ -390,9 +386,9 @@ export default function MultiplayerResultsScreen() {
                         <View style={styles.answerContainer}>
                           <Text style={styles.answerWord}>{result.word}</Text>
                           {result.isValid ? (
-                            <CheckCircle size={20} color="#4caf50" />
+                            <CheckCircle size={20} color={colors.success} />
                           ) : (
-                            <XCircle size={20} color="#f44336" />
+                            <XCircle size={20} color={colors.danger} />
                           )}
                           <Text style={styles.pointsText}>+{result.points}</Text>
                         </View>
@@ -406,9 +402,9 @@ export default function MultiplayerResultsScreen() {
                         <View style={styles.answerContainer}>
                           <Text style={styles.answerWord}>{opponentResult.word}</Text>
                           {opponentResult.isValid ? (
-                            <CheckCircle size={20} color="#4caf50" />
+                            <CheckCircle size={20} color={colors.success} />
                           ) : (
-                            <XCircle size={20} color="#f44336" />
+                            <XCircle size={20} color={colors.danger} />
                           )}
                           <Text style={styles.pointsText}>+{opponentResult.points}</Text>
                         </View>
@@ -427,13 +423,13 @@ export default function MultiplayerResultsScreen() {
           <Button
             title="Manche suivante"
             onPress={handleNextRound}
-            icon={<Play size={20} color="#fff" />}
+            icon={<Play size={20} color={colors.onPrimary} />}
           />
           <Button
             title="Arrêter la partie"
             onPress={handleStopGame}
             variant="secondary"
-            icon={<StopCircle size={20} color="#007AFF" />}
+            icon={<StopCircle size={20} color={colors.primary} />}
           />
         </View>
       </ScrollView>
@@ -444,7 +440,7 @@ export default function MultiplayerResultsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0e27',
+    backgroundColor: colors.bg,
   },
   scrollContent: {
     padding: 20,
@@ -461,30 +457,30 @@ const styles = StyleSheet.create({
   roundTitle: {
     fontSize: 32,
     fontWeight: '800',
-    color: '#fff',
+    color: colors.text,
   },
   letterBadge: {
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: 'rgba(255, 215, 0, 0.2)',
+    backgroundColor: colors.goldSoft,
     borderWidth: 2,
-    borderColor: '#FFD700',
+    borderColor: colors.gold,
     justifyContent: 'center',
     alignItems: 'center',
   },
   letterText: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#FFD700',
+    color: colors.gold,
   },
   scoreCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: colors.surface,
     borderRadius: 24,
     padding: 24,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 215, 0, 0.3)',
+    borderColor: colors.goldBorder,
   },
   scoreHeader: {
     flexDirection: 'row',
@@ -496,7 +492,7 @@ const styles = StyleSheet.create({
   scoreLabel: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#fff',
+    color: colors.text,
   },
   scoresRow: {
     flexDirection: 'row',
@@ -505,19 +501,19 @@ const styles = StyleSheet.create({
   scoreBlock: {
     flex: 1,
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    backgroundColor: colors.surfaceStrong,
     borderRadius: 16,
     padding: 16,
   },
   playerLabel: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.6)',
+    color: colors.textSecondary,
     marginBottom: 8,
   },
   scoreValue: {
     fontSize: 48,
     fontWeight: '800',
-    color: '#007AFF',
+    color: colors.primary,
     marginBottom: 8,
   },
   statsRow: {
@@ -528,30 +524,30 @@ const styles = StyleSheet.create({
   },
   validCount: {
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: colors.textSecondary,
   },
   penaltyText: {
     fontSize: 12,
-    color: '#f44336',
+    color: colors.danger,
     marginTop: 6,
     fontWeight: '700',
-    backgroundColor: 'rgba(244, 67, 54, 0.1)',
+    backgroundColor: colors.dangerSoft,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
   },
   totalScoreCard: {
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    backgroundColor: colors.primarySoft,
     borderRadius: 16,
     padding: 16,
     marginBottom: 24,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
+    borderColor: colors.primaryBorder,
   },
   totalScoreLabel: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.6)',
+    color: colors.textSecondary,
     marginBottom: 8,
   },
   totalScoreRow: {
@@ -562,11 +558,11 @@ const styles = StyleSheet.create({
   totalScoreValue: {
     fontSize: 32,
     fontWeight: '800',
-    color: '#007AFF',
+    color: colors.primary,
   },
   totalScoreSeparator: {
     fontSize: 24,
-    color: 'rgba(255, 255, 255, 0.4)',
+    color: colors.textMuted,
   },
   comparisonContainer: {
     marginBottom: 24,
@@ -574,22 +570,22 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#fff',
+    color: colors.text,
     marginBottom: 16,
     textAlign: 'center',
   },
   comparisonCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: colors.border,
   },
   categoryName: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#fff',
+    color: colors.text,
     marginBottom: 12,
     textAlign: 'center',
   },
@@ -604,27 +600,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    backgroundColor: colors.surfaceStrong,
     padding: 8,
     borderRadius: 8,
   },
   answerWord: {
     fontSize: 15,
-    color: '#fff',
+    color: colors.text,
     fontWeight: '600',
     flex: 1,
   },
   noAnswer: {
     fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.3)',
+    color: colors.textMuted,
     fontStyle: 'italic',
     textAlign: 'center',
   },
   pointsText: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#4caf50',
-    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+    color: colors.success,
+    backgroundColor: colors.successSoft,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
@@ -640,27 +636,27 @@ const styles = StyleSheet.create({
   winnerText: {
     fontSize: 36,
     fontWeight: '800',
-    color: '#4caf50',
+    color: colors.success,
     marginTop: 20,
   },
   loserText: {
     fontSize: 32,
     fontWeight: '700',
-    color: 'rgba(255, 255, 255, 0.6)',
+    color: colors.textSecondary,
     marginTop: 16,
   },
   winnerName: {
     fontSize: 20,
-    color: '#007AFF',
+    color: colors.primary,
     marginTop: 8,
   },
   finalScoresCard: {
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    backgroundColor: colors.primarySoft,
     borderRadius: 24,
     padding: 24,
     marginBottom: 24,
     borderWidth: 2,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
+    borderColor: colors.primaryBorder,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -677,32 +673,32 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     padding: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: colors.border,
   },
   winnerBlock: {
-    backgroundColor: 'rgba(76, 175, 80, 0.15)',
+    backgroundColor: colors.successSoft,
     borderWidth: 2,
-    borderColor: '#4caf50',
+    borderColor: colors.success,
   },
   finalScoreValue: {
     fontSize: 52,
     fontWeight: '800',
-    color: '#007AFF',
+    color: colors.primary,
     marginBottom: 8,
   },
   historyContainer: {
     marginBottom: 24,
   },
   historyCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: colors.border,
   },
   historyHeader: {
     flexDirection: 'row',
@@ -713,18 +709,18 @@ const styles = StyleSheet.create({
   historyRound: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#fff',
+    color: colors.text,
   },
   historyScores: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    borderTopColor: colors.border,
   },
   historyScore: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: colors.textSecondary,
   },
   waitingContainer: {
     flex: 1,
@@ -735,13 +731,13 @@ const styles = StyleSheet.create({
   waitingTitle: {
     fontSize: 26,
     fontWeight: '800',
-    color: '#fff',
+    color: colors.text,
     marginTop: 24,
     textAlign: 'center',
   },
   waitingText: {
     fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: colors.textSecondary,
     marginTop: 12,
     textAlign: 'center',
   },

@@ -13,7 +13,8 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useGameStore } from '../store/gameStore';
-import { colors, radius, spacing } from '../constants/theme';
+import { feedback } from '../services/feedback';
+import { colors, fonts, radius, spacing } from '../constants/theme';
 
 type TimerProps = {
   onTimeUp: () => void;
@@ -47,6 +48,10 @@ export default function Timer({ onTimeUp }: TimerProps) {
       const remaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
       if (remaining !== state.timeRemaining) {
         state.setTimeRemaining(remaining);
+        // Bip + petite vibration sur chacune des 10 dernières secondes
+        if (remaining <= 10 && remaining > 0) {
+          feedback.tick();
+        }
       }
       if (remaining <= 0 && !firedRef.current) {
         firedRef.current = true;
@@ -89,19 +94,7 @@ export default function Timer({ onTimeUp }: TimerProps) {
   const tint = isCritical ? colors.danger : isUrgent ? colors.warning : colors.primary;
 
   return (
-    <Animated.View
-      style={[
-        styles.container,
-        pulseStyle,
-        {
-          borderColor: isCritical
-            ? colors.dangerBorder
-            : isUrgent
-              ? colors.warningBorder
-              : colors.border,
-        },
-      ]}
-    >
+    <Animated.View style={[styles.container, pulseStyle]}>
       <View style={styles.timeRow}>
         <Clock size={18} color={tint} />
         <Text style={[styles.time, { color: tint }]}>
@@ -121,13 +114,11 @@ export default function Timer({ onTimeUp }: TimerProps) {
 }
 
 const styles = StyleSheet.create({
+  // Chrono "nu" du design : chiffre Fredoka + fine barre de progression
   container: {
-    backgroundColor: colors.surface,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xs,
     borderRadius: radius.md,
     alignItems: 'center',
-    borderWidth: 1,
     gap: spacing.sm,
   },
   timeRow: {
@@ -136,21 +127,21 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   time: {
-    fontSize: 28,
-    fontWeight: '800',
+    fontSize: 26,
+    fontFamily: fonts.displayBold,
     fontVariant: ['tabular-nums'],
-    letterSpacing: 1,
+    letterSpacing: 0.5,
   },
   track: {
     width: '100%',
     minWidth: 96,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: colors.surfaceStrong,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: colors.bgDeep,
     overflow: 'hidden',
   },
   fill: {
     height: '100%',
-    borderRadius: 3,
+    borderRadius: 4,
   },
 });

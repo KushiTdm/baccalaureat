@@ -63,7 +63,7 @@ type GameState = {
   setResults: (results: GameResult[]) => void;
   setScore: (score: number) => void;
   setIsHost: (isHost: boolean) => void;
-  startGame: (letter: string, categories: Categorie[]) => void;
+  startGame: (letter: string, categories: Categorie[], durationSec?: number) => void;
   startMultiplayerGame: (letter: string, categories: Categorie[], isHost: boolean, opponentName: string) => void;
   setMultiplayerResults: (myResults: GameResult[], myScore: number, stoppedEarly?: boolean) => void;
   setOpponentResults: (results: GameResult[], score: number) => void;
@@ -141,7 +141,7 @@ export const useGameStore = create<GameState>((set) => ({
 
   setIsHost: (isHost) => set({ isHost }),
 
-  startGame: (letter, categories) =>
+  startGame: (letter, categories, durationSec = 120) =>
     set({
       currentLetter: letter,
       categories,
@@ -149,9 +149,9 @@ export const useGameStore = create<GameState>((set) => ({
       results: null,
       score: 0,
       isPlaying: true,
-      timeRemaining: 120,
-      roundEndsAt: Date.now() + 120_000,
-      roundDurationSec: 120,
+      timeRemaining: durationSec,
+      roundEndsAt: Date.now() + durationSec * 1000,
+      roundDurationSec: durationSec,
       isMultiplayer: false,
       isHost: false,
       opponentName: null,

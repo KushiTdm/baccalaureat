@@ -273,6 +273,58 @@ function maybeFinalizeRound(roomId) {
   }
 }
 
+// Normalisation identique au client (minuscules, sans accents, sans espaces)
+function normalizeWord(word) {
+  return String(word || '')
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+/**
+ * Règle "mots identiques" : si plusieurs joueurs ont le même mot valide dans
+ * une catégorie, chacun ne garde que la moitié des points (arrondi supérieur).
+ * Ajuste les points détaillés, le score de manche ET le score total cumulé
+ * (déjà incrémenté au moment du submit-score).
+ */
+function applyDuplicateWordRule(room) {
+  const cr = room.currentRound;
+  const entries = Array.from(cr.scores.entries());
+  if (entries.length < 2) return;
+
+  // categorieId -> Map(motNormalisé -> [{ playerId, result }])
+  const byCategory = new Map();
+  for (const [playerId, data] of entries) {
+    for (const r of data.results || []) {
+      if (!r || !r.isValid || !r.word) continue;
+      if (!byCategory.has(r.categorieId)) byCategory.set(r.categorieId, new Map());
+      const words = byCategory.get(r.categorieId);
+      const key = normalizeWord(r.word);
+      if (!words.has(key)) words.set(key, []);
+      words.get(key).push({ playerId, result: r });
+    }
+  }
+
+  for (const words of byCategory.values()) {
+    for (const holders of words.values()) {
+      if (holders.length < 2) continue;
+      for (const { playerId, result } of holders) {
+        const original = typeof result.points === 'number' ? result.points : 2;
+        const halved = Math.ceil(original / 2);
+        const diff = original - halved;
+        if (diff <= 0) continue;
+        result.points = halved;
+        result.duplicate = true;
+        const s = cr.scores.get(playerId);
+        if (s) s.score = Math.max(0, (s.score || 0) - diff);
+        const player = room.players.get(playerId);
+        if (player) player.score = Math.max(0, (player.score || 0) - diff);
+      }
+    }
+  }
+}
+
 /**
  * Finalise la manche : construit le classement à partir des scores reçus
  * et émet 'all-scores-ready' UNE SEULE FOIS. Les joueurs qui n'ont pas
@@ -288,6 +340,11 @@ function finalizeRound(roomId) {
   cr.active = false;
 
   clearRoundTimers(room);
+
+  // Règle du Petit Bac : un mot valide trouvé par PLUSIEURS joueurs dans la
+  // même catégorie ne vaut que la moitié des points (2 → 1). On ajuste ici
+  // car le serveur est le seul à voir toutes les réponses.
+  applyDuplicateWordRule(room);
 
   const results = Array.from(room.players.entries()).map(([id, data]) => {
     const s = cr.scores.get(id);

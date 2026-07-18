@@ -157,13 +157,24 @@ export async function saveGame(
     mot_saisi: string;
     est_valide: boolean;
     points: number;
-  }>
+  }>,
+  userId?: string
 ): Promise<string> {
-  const { data: partie, error: partieError } = await supabase
+  // user_id est optionnel : si la migration stats-migration.sql n'est pas
+  // encore passée, on retente sans la colonne plutôt que d'échouer.
+  let { data: partie, error: partieError } = await supabase
     .from('parties')
-    .insert({ lettre, score })
+    .insert(userId ? { lettre, score, user_id: userId } : { lettre, score })
     .select()
     .single();
+
+  if (partieError && userId) {
+    ({ data: partie, error: partieError } = await supabase
+      .from('parties')
+      .insert({ lettre, score })
+      .select()
+      .single());
+  }
 
   if (partieError) {
     throw new Error(partieError.message);

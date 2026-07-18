@@ -1,8 +1,9 @@
 // app/profile.tsx
 import { View, Text, StyleSheet, ScrollView, Alert, TextInput, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useUserStore } from '../store/userStore';
+import { getSoloHistory, SoloGameSummary } from '../services/stats';
 import Button from '../components/Button';
 import Animated, {
   FadeIn,
@@ -21,6 +22,8 @@ import {
   ArrowLeft,
   LogOut
 } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { colors, gradients, fonts, radius, spacing, shadow } from '../constants/theme';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -28,6 +31,13 @@ export default function ProfileScreen() {
   const [isEditingUsername, setIsEditingUsername] = useState(false);
   const [newUsername, setNewUsername] = useState(user?.username || '');
   const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState<SoloGameSummary[]>([]);
+
+  useEffect(() => {
+    if (user?.id) {
+      getSoloHistory(user.id).then(setHistory);
+    }
+  }, [user?.id]);
 
   if (!user) {
     return (
@@ -100,14 +110,14 @@ export default function ProfileScreen() {
             style={styles.backButton}
             onPress={() => router.back()}
           >
-            <ArrowLeft size={24} color="#fff" />
+            <ArrowLeft size={24} color={colors.primary} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Profil</Text>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.logoutButton}
             onPress={handleLogout}
           >
-            <LogOut size={22} color="#f44336" />
+            <LogOut size={22} color={colors.danger} />
           </TouchableOpacity>
         </Animated.View>
 
@@ -117,14 +127,19 @@ export default function ProfileScreen() {
           style={styles.profileCard}
         >
           <View style={styles.avatarContainer}>
-            <View style={styles.avatar}>
+            <LinearGradient
+              colors={gradients.sunset}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.avatar}
+            >
               <Text style={styles.avatarText}>
                 {user.username ? user.username.charAt(0).toUpperCase() : '?'}
               </Text>
-            </View>
+            </LinearGradient>
             {user.rank_position && user.rank_position <= 10 && (
               <View style={styles.rankBadge}>
-                <Trophy size={16} color="#FFD700" />
+                <Trophy size={16} color={colors.goldDeep} />
                 <Text style={styles.rankText}>#{user.rank_position}</Text>
               </View>
             )}
@@ -163,7 +178,7 @@ export default function ProfileScreen() {
                 style={styles.editButton}
                 onPress={() => setIsEditingUsername(true)}
               >
-                <Edit3 size={18} color="#007AFF" />
+                <Edit3 size={18} color={colors.primary} />
               </TouchableOpacity>
             </View>
           )}
@@ -180,25 +195,25 @@ export default function ProfileScreen() {
           style={styles.statsGrid}
         >
           <View style={styles.statCard}>
-            <Trophy size={28} color="#FFD700" />
+            <Trophy size={28} color={colors.gold} />
             <Text style={styles.statValue}>{user.total_games_won}</Text>
             <Text style={styles.statLabel}>Victoires</Text>
           </View>
 
           <View style={styles.statCard}>
-            <Target size={28} color="#4caf50" />
+            <Target size={28} color={colors.success} />
             <Text style={styles.statValue}>{user.total_games_played}</Text>
             <Text style={styles.statLabel}>Parties</Text>
           </View>
 
           <View style={styles.statCard}>
-            <TrendingUp size={28} color="#2196f3" />
+            <TrendingUp size={28} color={colors.blue} />
             <Text style={styles.statValue}>{winRate.toFixed(0)}%</Text>
             <Text style={styles.statLabel}>Victoires</Text>
           </View>
 
           <View style={styles.statCard}>
-            <Award size={28} color="#ff9800" />
+            <Award size={28} color={colors.pink} />
             <Text style={styles.statValue}>{user.total_points}</Text>
             <Text style={styles.statLabel}>Points</Text>
           </View>
@@ -242,15 +257,36 @@ export default function ProfileScreen() {
           </View>
         </Animated.View>
 
+        {/* Historique des parties solo */}
+        {history.length > 0 && (
+          <Animated.View
+            entering={FadeInUp.delay(450)}
+            style={styles.detailedStatsCard}
+          >
+            <Text style={styles.sectionTitle}>Dernières parties solo</Text>
+            {history.map((game) => (
+              <View key={game.id} style={styles.statRow}>
+                <View style={styles.historyLetterBadge}>
+                  <Text style={styles.historyLetterText}>{game.lettre.toUpperCase()}</Text>
+                </View>
+                <Text style={styles.historyDate}>
+                  {new Date(game.date_jeu).toLocaleDateString('fr-FR')}
+                </Text>
+                <Text style={styles.statRowValue}>{game.score} pts</Text>
+              </View>
+            ))}
+          </Animated.View>
+        )}
+
         {/* Section compte */}
-        <Animated.View 
+        <Animated.View
           entering={FadeInUp.delay(500)}
           style={styles.accountCard}
         >
           <Text style={styles.sectionTitle}>Compte</Text>
 
           <View style={styles.accountInfo}>
-            <Mail size={20} color="rgba(255, 255, 255, 0.6)" />
+            <Mail size={20} color={colors.textSecondary} />
             <View style={styles.accountInfoText}>
               <Text style={styles.accountLabel}>Email</Text>
               <Text style={styles.accountValue}>
@@ -291,7 +327,7 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0e27',
+    backgroundColor: colors.bg,
   },
   backgroundGradient: {
     position: 'absolute',
@@ -299,7 +335,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#0a0e27',
+    backgroundColor: colors.bg,
   },
   scrollView: {
     flex: 1,
@@ -319,75 +355,70 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
+    ...shadow.card,
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#fff',
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
   },
   logoutButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: 'rgba(244, 67, 54, 0.1)',
+    backgroundColor: colors.dangerSoft,
     justifyContent: 'center',
     alignItems: 'center',
   },
   errorText: {
-    color: '#f44336',
+    color: colors.danger,
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 20,
   },
   profileCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 24,
+    borderRadius: radius.xl,
     padding: 24,
     marginBottom: 20,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   avatarContainer: {
     position: 'relative',
     marginBottom: 16,
   },
+  // Avatar dégradé "sunset" du design
   avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(0, 122, 255, 0.2)',
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 3,
-    borderColor: '#007AFF',
+    ...shadow.glow(colors.pink),
   },
   avatarText: {
-    fontSize: 42,
-    fontWeight: '900',
-    color: '#007AFF',
+    fontSize: 38,
+    fontWeight: '700',
+    color: colors.onPrimary,
   },
   rankBadge: {
     position: 'absolute',
     bottom: 0,
-    right: 0,
-    backgroundColor: 'rgba(255, 215, 0, 0.2)',
+    right: -6,
+    backgroundColor: colors.goldDeepSoft,
     borderRadius: 16,
     padding: 6,
     paddingHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    borderWidth: 2,
-    borderColor: '#FFD700',
   },
   rankText: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#FFD700',
+    color: colors.goldDeep,
   },
   usernameContainer: {
     flexDirection: 'row',
@@ -396,9 +427,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   username: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#fff',
+    fontSize: 26,
+    fontFamily: fonts.display,
+    color: colors.text,
   },
   editButton: {
     padding: 8,
@@ -408,13 +439,13 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   usernameInput: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     padding: 14,
     fontSize: 18,
-    color: '#fff',
+    color: colors.text,
     borderWidth: 2,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
+    borderColor: colors.primaryBorder,
     textAlign: 'center',
     fontWeight: '600',
     marginBottom: 12,
@@ -428,17 +459,16 @@ const styles = StyleSheet.create({
   },
   eloLabel: {
     fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.6)',
+    color: colors.textSecondary,
     marginBottom: 4,
     fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   eloValue: {
     fontSize: 32,
-    fontWeight: '900',
-    color: '#007AFF',
-    textShadowColor: 'rgba(0, 122, 255, 0.5)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 8,
+    fontFamily: fonts.displayBold,
+    color: colors.primary,
   },
   statsGrid: {
     flexDirection: 'row',
@@ -449,37 +479,35 @@ const styles = StyleSheet.create({
   statCard: {
     flex: 1,
     minWidth: '47%',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 16,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
     padding: 20,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    ...shadow.card,
   },
   statValue: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#fff',
+    fontSize: 26,
+    fontFamily: fonts.displayBold,
+    color: colors.text,
     marginTop: 8,
     marginBottom: 4,
   },
   statLabel: {
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.6)',
-    fontWeight: '600',
+    color: colors.textSecondary,
+    fontWeight: '500',
   },
   detailedStatsCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
     padding: 20,
     marginBottom: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    ...shadow.card,
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '800',
-    color: '#fff',
+    fontWeight: '700',
+    color: colors.text,
     marginBottom: 16,
   },
   statRow: {
@@ -487,25 +515,42 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
+    borderBottomWidth: 0.5,
+    borderBottomColor: colors.borderLight,
   },
   statRowLabel: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: colors.textSecondary,
   },
   statRowValue: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#fff',
+    color: colors.text,
+  },
+  historyLetterBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: colors.primarySoft,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  historyLetterText: {
+    fontSize: 16,
+    fontFamily: fonts.displayBold,
+    color: colors.primary,
+  },
+  historyDate: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginLeft: 12,
   },
   accountCard: {
-    backgroundColor: 'rgba(0, 122, 255, 0.08)',
-    borderRadius: 20,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.lg,
     padding: 20,
     marginBottom: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.2)',
   },
   accountInfo: {
     flexDirection: 'row',
@@ -518,29 +563,28 @@ const styles = StyleSheet.create({
   },
   accountLabel: {
     fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.6)',
+    color: colors.textSecondary,
     marginBottom: 2,
   },
   accountValue: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#fff',
+    color: colors.text,
   },
   accountNote: {
     fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.5)',
+    color: colors.textSecondary,
     lineHeight: 18,
     fontStyle: 'italic',
   },
   memberSinceCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderRadius: 12,
+    borderRadius: radius.md,
     padding: 16,
     alignItems: 'center',
   },
   memberSinceText: {
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.5)',
+    color: colors.textMuted,
     fontWeight: '600',
   },
 });

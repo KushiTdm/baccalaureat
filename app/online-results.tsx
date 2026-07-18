@@ -6,13 +6,20 @@ import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import Animated, { FadeInDown, FadeInUp, BounceIn } from 'react-native-reanimated';
 import { useGameStore } from '../store/gameStore';
+import { useUserStore } from '../store/userStore';
+import { recordOnlineGame } from '../services/stats';
 import Button from '../components/Button';
+import AdBanner from '../components/AdBanner';
+import { maybeShowInterstitial } from '../services/ads';
+import { feedback } from '../services/feedback';
 import { websocketService } from '../services/websocket';
+import { pickRandomLetter } from '../utils/letters';
+import { normalizeWord } from '../utils/normalize';
 import { CheckCircle, XCircle, Trophy, Crown, Play, StopCircle, Star, Award, Zap } from 'lucide-react-native';
+import { colors, fonts, radius, spacing, shadow } from '../constants/theme';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SAFE_AREA_HEIGHT = SCREEN_HEIGHT * 0.25;
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 export default function OnlineResultsScreen() {
   const router = useRouter();
@@ -37,6 +44,36 @@ export default function OnlineResultsScreen() {
   const [showFinalResults, setShowFinalResults] = useState(false);
   const [waitingForNextRound, setWaitingForNextRound] = useState(false);
   const [opponentGone, setOpponentGone] = useState(false);
+
+  // Partie terminée (écran final uniquement) → interstitiel + stats/ELO
+  const statsRecordedRef = useRef(false);
+  useEffect(() => {
+    if (!showFinalResults || statsRecordedRef.current) return;
+    statsRecordedRef.current = true;
+
+    maybeShowInterstitial();
+
+    const s = useGameStore.getState();
+    const myTotal = s.roundHistory.reduce((sum, r) => sum + r.myScore, 0);
+    const oppTotal = s.roundHistory.reduce((sum, r) => sum + r.opponentScore, 0);
+
+    // Son/vibration de fin de partie (rien en cas d'égalité)
+    if (myTotal > oppTotal) {
+      feedback.victory();
+    } else if (myTotal < oppTotal) {
+      feedback.defeat();
+    }
+
+    recordOnlineGame({
+      userId: useUserStore.getState().user?.id,
+      myPlayerId: websocketService.getCurrentPlayerId(),
+      myScore: myTotal,
+      opponentScore: oppTotal,
+      roundsPlayed: s.roundHistory.length,
+      validWords: s.roundHistory.reduce((sum, r) => sum + r.myValidWords, 0),
+      bestRoundScore: s.roundHistory.reduce((max, r) => Math.max(max, r.myScore), 0),
+    });
+  }, [showFinalResults]);
 
   const committedRef = useRef(false);
   const navigatedRef = useRef(false);
@@ -113,9 +150,7 @@ export default function OnlineResultsScreen() {
   const getNewLetter = () => {
     const used = roundHistory.map((r) => r.letter);
     if (currentLetter) used.push(currentLetter);
-    const available = LETTERS.filter((l) => !used.includes(l));
-    if (available.length === 0) return LETTERS[Math.floor(Math.random() * LETTERS.length)];
-    return available[Math.floor(Math.random() * available.length)];
+    return pickRandomLetter(used);
   };
 
   const handleNextRound = () => {
@@ -159,21 +194,21 @@ export default function OnlineResultsScreen() {
 
     return (
       <View style={styles.container}>
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <Animated.View entering={BounceIn.duration(700)} style={styles.winnerSection}>
             {isDraw ? (
               <>
-                <Trophy size={80} color="#FFD700" />
+                <Trophy size={80} color={colors.gold} />
                 <Text style={styles.winnerText}>Égalité ! 🤝</Text>
               </>
             ) : isWinner ? (
               <>
-                <Crown size={80} color="#FFD700" />
+                <Crown size={80} color={colors.gold} />
                 <Text style={styles.winnerText}>Victoire ! 🎉</Text>
               </>
             ) : (
               <>
-                <Trophy size={80} color="#999" />
+                <Trophy size={80} color={colors.textMuted} />
                 <Text style={styles.loserText}>Défaite</Text>
                 <Text style={styles.winnerName}>{opponentName} gagne !</Text>
               </>
@@ -182,7 +217,7 @@ export default function OnlineResultsScreen() {
 
           <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.finalScoresCard}>
             <View style={styles.cardHeader}>
-              <Award size={24} color="#007AFF" />
+              <Award size={24} color={colors.primary} />
               <Text style={styles.sectionTitle}>Score final</Text>
             </View>
 
@@ -191,7 +226,7 @@ export default function OnlineResultsScreen() {
                 <Text style={styles.playerLabel}>Vous</Text>
                 <Text style={styles.finalScoreValue}>{myTotalScore}</Text>
                 <View style={styles.statsRow}>
-                  <Star size={16} color="#FFD700" />
+                  <Star size={16} color={colors.gold} />
                   <Text style={styles.validCount}>{myWordsTotal} mots</Text>
                 </View>
               </View>
@@ -200,7 +235,7 @@ export default function OnlineResultsScreen() {
                 <Text style={styles.playerLabel}>{opponentName}</Text>
                 <Text style={styles.finalScoreValue}>{opponentTotal}</Text>
                 <View style={styles.statsRow}>
-                  <Star size={16} color="#FFD700" />
+                  <Star size={16} color={colors.gold} />
                   <Text style={styles.validCount}>{oppWordsTotal} mots</Text>
                 </View>
               </View>
@@ -233,6 +268,8 @@ export default function OnlineResultsScreen() {
             <Button title="Nouvelle partie" onPress={handleNewGame} />
           </Animated.View>
         </ScrollView>
+
+        <AdBanner />
       </View>
     );
   }
@@ -258,14 +295,14 @@ export default function OnlineResultsScreen() {
                 <Button
                   title="Relancer la manche"
                   onPress={() => websocketService.nextRound(getNewLetter())}
-                  icon={<Play size={20} color="#fff" />}
+                  icon={<Play size={20} color={colors.onPrimary} />}
                 />
               )}
               <Button
                 title="Terminer la partie"
                 onPress={handleStopGame}
                 variant="secondary"
-                icon={<StopCircle size={20} color="#007AFF" />}
+                icon={<StopCircle size={20} color={colors.primary} />}
               />
             </View>
           )}
@@ -287,7 +324,7 @@ export default function OnlineResultsScreen() {
 
         <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.scoreCard}>
           <View style={styles.scoreHeader}>
-            <Zap size={24} color="#FFD700" />
+            <Zap size={24} color={colors.gold} />
             <Text style={styles.scoreLabel}>Score de la manche</Text>
           </View>
 
@@ -296,7 +333,7 @@ export default function OnlineResultsScreen() {
               <Text style={styles.playerLabel}>Vous</Text>
               <Text style={styles.scoreValue}>{myFinalScore}</Text>
               <View style={styles.statsRow}>
-                <CheckCircle size={16} color="#4caf50" />
+                <CheckCircle size={16} color={colors.success} />
                 <Text style={styles.validCount}>{myValid} valides</Text>
               </View>
               {stoppedEarly && myResults.some((r) => r.word && !r.isValid) && (
@@ -308,7 +345,7 @@ export default function OnlineResultsScreen() {
               <Text style={styles.playerLabel}>{opponentName}</Text>
               <Text style={styles.scoreValue}>{opponentFinalScore}</Text>
               <View style={styles.statsRow}>
-                <CheckCircle size={16} color="#4caf50" />
+                <CheckCircle size={16} color={colors.success} />
                 <Text style={styles.validCount}>{oppValid} valides</Text>
               </View>
             </View>
@@ -333,6 +370,12 @@ export default function OnlineResultsScreen() {
           {categories.map((category, index) => {
             const myAnswer = myResults.find((r) => r.categorieId === category.id);
             const oppAnswer = oppResults.find((r) => r.categorieId === category.id);
+            // Règle Petit Bac : même mot valide chez les deux → points partagés
+            const isDuplicate = !!(
+              myAnswer?.word && oppAnswer?.word &&
+              myAnswer.isValid && oppAnswer.isValid &&
+              normalizeWord(myAnswer.word) === normalizeWord(oppAnswer.word)
+            );
             return (
               <Animated.View
                 key={category.id ?? index}
@@ -346,9 +389,9 @@ export default function OnlineResultsScreen() {
                       <View style={styles.answerContainer}>
                         <Text style={styles.answerWord}>{myAnswer.word}</Text>
                         {myAnswer.isValid ? (
-                          <CheckCircle size={20} color="#4caf50" />
+                          <CheckCircle size={20} color={colors.success} />
                         ) : (
-                          <XCircle size={20} color="#f44336" />
+                          <XCircle size={20} color={colors.danger} />
                         )}
                         <Text style={styles.pointsText}>+{myAnswer.points}</Text>
                       </View>
@@ -362,9 +405,9 @@ export default function OnlineResultsScreen() {
                       <View style={styles.answerContainer}>
                         <Text style={styles.answerWord}>{oppAnswer.word}</Text>
                         {oppAnswer.isValid ? (
-                          <CheckCircle size={20} color="#4caf50" />
+                          <CheckCircle size={20} color={colors.success} />
                         ) : (
-                          <XCircle size={20} color="#f44336" />
+                          <XCircle size={20} color={colors.danger} />
                         )}
                         <Text style={styles.pointsText}>+{oppAnswer.points}</Text>
                       </View>
@@ -373,6 +416,11 @@ export default function OnlineResultsScreen() {
                     )}
                   </View>
                 </View>
+                {isDuplicate && (
+                  <View style={styles.duplicateBadge}>
+                    <Text style={styles.duplicateText}>🤝 Mots identiques — points partagés</Text>
+                  </View>
+                )}
               </Animated.View>
             );
           })}
@@ -387,12 +435,12 @@ export default function OnlineResultsScreen() {
         )}
 
         <Animated.View entering={FadeInUp.delay(400)} style={styles.buttonContainer}>
-          <Button title="Manche suivante" onPress={handleNextRound} icon={<Play size={20} color="#fff" />} />
+          <Button title="Manche suivante" onPress={handleNextRound} icon={<Play size={20} color={colors.onPrimary} />} />
           <Button
             title="Arrêter la partie"
             onPress={handleStopGame}
             variant="secondary"
-            icon={<StopCircle size={20} color="#007AFF" />}
+            icon={<StopCircle size={20} color={colors.primary} />}
           />
         </Animated.View>
       </ScrollView>
@@ -401,7 +449,8 @@ export default function OnlineResultsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0e27' },
+  container: { flex: 1, backgroundColor: colors.bg },
+  scrollView: { flex: 1 },
   scrollContent: { padding: 20, paddingTop: 60, paddingBottom: SAFE_AREA_HEIGHT },
   roundHeader: {
     alignItems: 'center',
@@ -410,25 +459,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 12,
   },
-  roundTitle: { fontSize: 32, fontWeight: '800', color: '#fff' },
+  roundTitle: { fontSize: 30, fontFamily: fonts.display, color: colors.text },
   letterBadge: {
     width: 50,
     height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(255, 215, 0, 0.2)',
+    borderRadius: radius.md,
+    backgroundColor: colors.goldSoft,
     borderWidth: 2,
-    borderColor: '#FFD700',
+    borderColor: colors.goldBorder,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  letterText: { fontSize: 24, fontWeight: '700', color: '#FFD700' },
+  letterText: { fontSize: 24, fontFamily: fonts.displayBold, color: colors.goldDeep },
   scoreCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 24,
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
     padding: 24,
     marginBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 215, 0, 0.3)',
+    ...shadow.card,
   },
   scoreHeader: {
     flexDirection: 'row',
@@ -437,42 +485,41 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 20,
   },
-  scoreLabel: { fontSize: 18, fontWeight: '600', color: '#fff' },
+  scoreLabel: { fontSize: 18, fontWeight: '700', color: colors.text },
   scoresRow: { flexDirection: 'row', gap: 16 },
   scoreBlock: {
     flex: 1,
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderRadius: 16,
+    backgroundColor: colors.bg,
+    borderRadius: radius.lg,
     padding: 16,
   },
-  playerLabel: { fontSize: 14, color: 'rgba(255, 255, 255, 0.6)', marginBottom: 8 },
-  scoreValue: { fontSize: 48, fontWeight: '800', color: '#007AFF', marginBottom: 8 },
+  playerLabel: { fontSize: 14, color: colors.textSecondary, marginBottom: 8, fontWeight: '600' },
+  scoreValue: { fontSize: 48, fontFamily: fonts.displayBold, color: colors.primary, marginBottom: 8 },
   statsRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
-  validCount: { fontSize: 13, color: 'rgba(255, 255, 255, 0.7)' },
+  validCount: { fontSize: 13, color: colors.textSecondary },
   penaltyText: {
     fontSize: 12,
-    color: '#f44336',
+    color: colors.danger,
     marginTop: 6,
     fontWeight: '700',
-    backgroundColor: 'rgba(244, 67, 54, 0.1)',
+    backgroundColor: colors.dangerSoft,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
+    overflow: 'hidden',
   },
   totalScoreCard: {
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
-    borderRadius: 16,
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.lg,
     padding: 16,
     marginBottom: 24,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
   },
-  totalScoreLabel: { fontSize: 14, color: 'rgba(255, 255, 255, 0.6)', marginBottom: 8 },
+  totalScoreLabel: { fontSize: 14, color: colors.textSecondary, marginBottom: 8, fontWeight: '600' },
   totalScoreRow: { flexDirection: 'row', alignItems: 'center', gap: 24 },
-  totalScoreValue: { fontSize: 32, fontWeight: '800', color: '#007AFF' },
-  totalScoreSeparator: { fontSize: 24, color: 'rgba(255, 255, 255, 0.4)' },
+  totalScoreValue: { fontSize: 32, fontFamily: fonts.displayBold, color: colors.primary },
+  totalScoreSeparator: { fontSize: 24, color: colors.textMuted },
   comparisonContainer: { marginBottom: 24 },
   comparisonLegend: {
     flexDirection: 'row',
@@ -484,79 +531,93 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     fontWeight: '700',
-    color: 'rgba(255, 255, 255, 0.5)',
+    color: colors.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
     textAlign: 'center',
   },
   opponentGoneBanner: {
-    backgroundColor: 'rgba(255, 152, 0, 0.1)',
-    borderRadius: 12,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: 'rgba(255, 152, 0, 0.3)',
+    borderColor: colors.warningBorder,
     padding: 12,
     marginBottom: 16,
   },
   sectionTitle: {
     fontSize: 20,
-    fontWeight: '700',
-    color: '#fff',
+    fontFamily: fonts.display,
+    color: colors.text,
     marginBottom: 16,
     textAlign: 'center',
   },
   comparisonCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 16,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
     padding: 16,
     marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    ...shadow.card,
   },
   categoryName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textSecondary,
     marginBottom: 12,
     textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   comparisonRow: { flexDirection: 'row', gap: 12 },
+  duplicateBadge: {
+    marginTop: 10,
+    alignSelf: 'center',
+    backgroundColor: colors.goldDeepSoft,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  duplicateText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.goldDeep,
+  },
   answerBlock: { flex: 1 },
   answerContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    backgroundColor: colors.bg,
     padding: 8,
     borderRadius: 8,
   },
-  answerWord: { fontSize: 15, color: '#fff', fontWeight: '600', flex: 1 },
+  answerWord: { fontSize: 15, color: colors.text, fontWeight: '600', flex: 1 },
   noAnswer: {
     fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.3)',
+    color: colors.textMuted,
     fontStyle: 'italic',
     textAlign: 'center',
   },
   pointsText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
-    color: '#4caf50',
-    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+    color: colors.success,
+    backgroundColor: colors.successSoft,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
+    overflow: 'hidden',
   },
   buttonContainer: { gap: 12, marginTop: 8 },
   winnerSection: { alignItems: 'center', marginBottom: 32 },
-  winnerText: { fontSize: 36, fontWeight: '800', color: '#4caf50', marginTop: 20 },
-  loserText: { fontSize: 32, fontWeight: '700', color: 'rgba(255, 255, 255, 0.6)', marginTop: 16 },
-  winnerName: { fontSize: 20, color: '#007AFF', marginTop: 8 },
+  winnerText: { fontSize: 34, fontFamily: fonts.displayBold, color: colors.success, marginTop: 20 },
+  loserText: { fontSize: 30, fontFamily: fonts.display, color: colors.textSecondary, marginTop: 16 },
+  winnerName: { fontSize: 20, color: colors.primary, marginTop: 8, fontWeight: '600' },
   finalScoresCard: {
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
-    borderRadius: 24,
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
     padding: 24,
     marginBottom: 24,
-    borderWidth: 2,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
+    ...shadow.card,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -570,25 +631,24 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     padding: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 16,
+    backgroundColor: colors.bg,
+    borderRadius: radius.lg,
     borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'transparent',
   },
   winnerBlock: {
-    backgroundColor: 'rgba(76, 175, 80, 0.15)',
+    backgroundColor: colors.successSoft,
     borderWidth: 2,
-    borderColor: '#4caf50',
+    borderColor: colors.success,
   },
-  finalScoreValue: { fontSize: 52, fontWeight: '800', color: '#007AFF', marginBottom: 8 },
+  finalScoreValue: { fontSize: 52, fontFamily: fonts.displayBold, color: colors.primary, marginBottom: 8 },
   historyContainer: { marginBottom: 24 },
   historyCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 16,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
     padding: 16,
     marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    ...shadow.card,
   },
   historyHeader: {
     flexDirection: 'row',
@@ -596,34 +656,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
-  historyRound: { fontSize: 16, fontWeight: '600', color: '#fff' },
+  historyRound: { fontSize: 16, fontWeight: '600', color: colors.text },
   historyScores: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    borderTopColor: colors.borderLight,
   },
-  historyScore: { fontSize: 14, color: 'rgba(255, 255, 255, 0.7)' },
+  historyScore: { fontSize: 14, color: colors.textSecondary },
   waitingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
   waitingActions: { marginTop: 32, gap: 12, alignSelf: 'stretch' },
   opponentGoneText: {
     fontSize: 14,
-    color: '#ff9800',
+    color: colors.goldDeep,
     textAlign: 'center',
     fontWeight: '600',
     marginBottom: 4,
   },
   waitingTitle: {
     fontSize: 26,
-    fontWeight: '800',
-    color: '#fff',
+    fontFamily: fonts.display,
+    color: colors.text,
     marginTop: 24,
     textAlign: 'center',
   },
   waitingText: {
     fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: colors.textSecondary,
     marginTop: 12,
     textAlign: 'center',
   },

@@ -1,47 +1,110 @@
-// app/multiplayer-setup.tsx
+// app/multiplayer-setup.tsx - Configuration du mode Bluetooth (BLE)
+// Deux rôles distincts :
+//   - "Créer une partie" : ce téléphone devient visible (périphérique GATT)
+//     et attend qu'un joueur le rejoigne.
+//   - "Rejoindre" : scanne les parties à proximité et s'y connecte ; c'est
+//     le joueur qui rejoint qui tire la lettre et envoie GAME_START.
 import { View, Text, StyleSheet, FlatList, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useState, useEffect } from 'react';
-import { Device } from 'react-native-ble-plx';
+import { useState, useEffect, useRef } from 'react';
 import Button from '../components/Button';
-import { bluetoothService } from '../services/bluetooth';
+import { bluetoothService, BluetoothDevice } from '../services/bluetooth';
 import { useGameStore } from '../store/gameStore';
+import { useUserStore } from '../store/userStore';
 import { getCategories } from '../services/api';
-import { Bluetooth, Users } from 'lucide-react-native';
+import { isDictionaryDownloaded } from '../utils/storage';
+import { Bluetooth, Users, Radio, Search, AlertCircle } from 'lucide-react-native';
+import { pickRandomLetter } from '../utils/letters';
+import { colors, fonts, radius, spacing, shadow } from '../constants/theme';
 
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+type Mode = 'choice' | 'hosting' | 'scanning';
 
 export default function MultiplayerSetupScreen() {
   const router = useRouter();
   const { startMultiplayerGame } = useGameStore();
+  const { user } = useUserStore();
+
+  const [mode, setMode] = useState<Mode>('choice');
+  const [devices, setDevices] = useState<BluetoothDevice[]>([]);
   const [scanning, setScanning] = useState(false);
-  const [devices, setDevices] = useState<Device[]>([]);
   const [connecting, setConnecting] = useState(false);
+  const [hasDict, setHasDict] = useState(true);
+
+  // Ne pas couper la connexion quand on quitte cet écran POUR ALLER au jeu
+  const navigatedToGameRef = useRef(false);
 
   useEffect(() => {
+    isDictionaryDownloaded().then(setHasDict);
     return () => {
-      if (bluetoothService.isConnected()) {
+      if (!navigatedToGameRef.current) {
         bluetoothService.disconnect();
       }
     };
   }, []);
 
-  async function handleScanDevices() {
+  if (!bluetoothService.isAvailable()) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.centerContent}>
+          <Bluetooth size={48} color={colors.textMuted} />
+          <Text style={styles.emptyText}>Bluetooth non disponible</Text>
+          <Text style={styles.emptySubtext}>
+            Ce mode nécessite l'application installée sur un téléphone (pas de web ni d'Expo Go).
+          </Text>
+          <Button title="Retour" onPress={() => router.back()} variant="secondary" />
+        </View>
+      </View>
+    );
+  }
+
+  const goToGame = () => {
+    navigatedToGameRef.current = true;
+    router.replace('/multiplayer-game');
+  };
+
+  // ----- RÔLE HÔTE : devenir visible et attendre -----
+  async function handleHost() {
+    const granted = await bluetoothService.requestPermissions('host');
+    if (!granted) {
+      Alert.alert('Permissions', 'Les permissions Bluetooth sont nécessaires pour créer une partie.');
+      return;
+    }
+
+    try {
+      // L'invité qui nous rejoint envoie GAME_START avec lettre + catégories
+      bluetoothService.setMessageListener((message) => {
+        if (message.type === 'GAME_START') {
+          const { letter, categories, opponentName } = message.data;
+          startMultiplayerGame(letter, categories, false, opponentName || 'Adversaire');
+          goToGame();
+        }
+      });
+      await bluetoothService.startHosting(user?.username || 'Petit Bac');
+      setMode('hosting');
+    } catch (error) {
+      console.error('BLE hosting error:', error);
+      Alert.alert('Erreur', 'Impossible de créer la partie Bluetooth.');
+    }
+  }
+
+  // ----- RÔLE INVITÉ : scanner puis rejoindre -----
+  async function handleScan() {
+    const granted = await bluetoothService.requestPermissions('guest');
+    if (!granted) {
+      Alert.alert('Permissions', 'Les permissions Bluetooth sont nécessaires pour scanner.');
+      return;
+    }
+
+    setMode('scanning');
     setScanning(true);
     setDevices([]);
 
     try {
-      await bluetoothService.scanForDevices(
-        (device) => {
-          setDevices((prev) => {
-            if (!prev.find((d) => d.id === device.id)) {
-              return [...prev, device];
-            }
-            return prev;
-          });
-        },
-        10000
-      );
+      await bluetoothService.scanForDevices((device) => {
+        setDevices((prev) =>
+          prev.find((d) => d.id === device.id) ? prev : [...prev, device]
+        );
+      }, 12000);
     } catch (error) {
       Alert.alert('Erreur', 'Impossible de scanner les appareils Bluetooth');
     } finally {
@@ -49,13 +112,12 @@ export default function MultiplayerSetupScreen() {
     }
   }
 
-  async function handleConnectDevice(device: Device) {
+  async function handleConnectDevice(device: BluetoothDevice) {
     setConnecting(true);
 
     try {
       await bluetoothService.connectToDevice(device);
-      
-      // Load categories
+
       const categories = await getCategories();
       if (categories.length === 0) {
         Alert.alert('Erreur', 'Aucune catégorie disponible');
@@ -63,33 +125,22 @@ export default function MultiplayerSetupScreen() {
         return;
       }
 
-      // Choose random letter
-      const randomLetter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
+      const randomLetter = pickRandomLetter();
 
-      // Send game start message to opponent
+      // On envoie tout ce qu'il faut à l'hôte pour démarrer sa manche
       await bluetoothService.sendMessage({
         type: 'GAME_START',
         data: {
           letter: randomLetter,
-          categories: categories,
-          isHost: false,
+          categories,
+          opponentName: user?.username || 'Adversaire',
         },
       });
 
-      // Start game for host
       startMultiplayerGame(randomLetter, categories, true, device.name || 'Adversaire');
-
-      Alert.alert(
-        'Connecté !',
-        `Vous êtes connecté à ${device.name}. La partie va commencer.`,
-        [
-          {
-            text: 'OK',
-            onPress: () => router.push('/multiplayer-game'),
-          },
-        ]
-      );
+      goToGame();
     } catch (error) {
+      console.error('BLE connect error:', error);
       Alert.alert('Erreur', 'Impossible de se connecter à cet appareil');
       await bluetoothService.disconnect();
     } finally {
@@ -97,72 +148,119 @@ export default function MultiplayerSetupScreen() {
     }
   }
 
+  function handleBack() {
+    bluetoothService.disconnect();
+    if (mode === 'choice') {
+      router.back();
+    } else {
+      setMode('choice');
+      setDevices([]);
+    }
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Bluetooth size={48} color="#007AFF" />
-        <Text style={styles.title}>Mode Multijoueur</Text>
-        <Text style={styles.subtitle}>Connectez-vous via Bluetooth</Text>
+        <Bluetooth size={48} color={colors.primary} />
+        <Text style={styles.title}>Mode Bluetooth</Text>
+        <Text style={styles.subtitle}>Jouez à deux, sans internet</Text>
       </View>
 
-      <View style={styles.infoCard}>
-        <Users size={24} color="#007AFF" />
-        <Text style={styles.infoText}>
-          Scannez les appareils à proximité et connectez-vous pour jouer ensemble
-        </Text>
-      </View>
-
-      {scanning && (
-        <View style={styles.scanningContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.scanningText}>Recherche en cours...</Text>
-        </View>
-      )}
-
-      {!scanning && devices.length === 0 && (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>Aucun appareil trouvé</Text>
-          <Text style={styles.emptySubtext}>
-            Assurez-vous que le Bluetooth est activé sur les deux appareils
+      {!hasDict && (
+        <View style={styles.warningCard}>
+          <AlertCircle size={20} color={colors.warning} />
+          <Text style={styles.warningText}>
+            Sans le dictionnaire hors-ligne (téléchargeable depuis l'accueil), la
+            validation des mots nécessitera une connexion internet.
           </Text>
         </View>
       )}
 
-      {devices.length > 0 && (
-        <View style={styles.devicesContainer}>
-          <Text style={styles.devicesTitle}>Appareils disponibles</Text>
+      {/* ----- CHOIX DU RÔLE ----- */}
+      {mode === 'choice' && (
+        <View style={styles.choiceContainer}>
+          <View style={styles.infoCard}>
+            <Users size={24} color={colors.primary} />
+            <Text style={styles.infoText}>
+              Un joueur crée la partie (il devient visible), l'autre la rejoint en scannant.
+            </Text>
+          </View>
+
+          <Button
+            title="Créer une partie"
+            onPress={handleHost}
+            icon={<Radio size={20} color={colors.onPrimary} />}
+          />
+          <Button
+            title="Rejoindre une partie"
+            onPress={handleScan}
+            variant="secondary"
+            icon={<Search size={20} color={colors.primary} />}
+          />
+          <Button title="Retour" onPress={handleBack} variant="secondary" />
+        </View>
+      )}
+
+      {/* ----- HÔTE : EN ATTENTE ----- */}
+      {mode === 'hosting' && (
+        <View style={styles.centerContent}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.waitingTitle}>Partie visible</Text>
+          <Text style={styles.emptySubtext}>
+            En attente d'un joueur à proximité...{'\n'}
+            Demandez-lui d'appuyer sur « Rejoindre une partie ».
+          </Text>
+          <Button title="Annuler" onPress={handleBack} variant="secondary" />
+        </View>
+      )}
+
+      {/* ----- INVITÉ : SCAN + LISTE ----- */}
+      {mode === 'scanning' && (
+        <View style={styles.scanContainer}>
+          {scanning && (
+            <View style={styles.scanningRow}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.scanningText}>Recherche des parties...</Text>
+            </View>
+          )}
+
+          {!scanning && devices.length === 0 && (
+            <View style={styles.centerContent}>
+              <Text style={styles.emptyText}>Aucune partie trouvée</Text>
+              <Text style={styles.emptySubtext}>
+                Vérifiez que l'autre joueur a bien appuyé sur « Créer une partie »
+                et que le Bluetooth est activé.
+              </Text>
+            </View>
+          )}
+
           <FlatList
             data={devices}
             keyExtractor={(item) => item.id}
             renderItem={({ item }) => (
               <View style={styles.deviceCard}>
                 <View style={styles.deviceInfo}>
-                  <Text style={styles.deviceName}>{item.name || 'Appareil inconnu'}</Text>
+                  <Text style={styles.deviceName}>{item.name || 'Partie Petit Bac'}</Text>
                   <Text style={styles.deviceId}>{item.id}</Text>
                 </View>
                 <Button
-                  title="Connecter"
+                  title="Rejoindre"
                   onPress={() => handleConnectDevice(item)}
                   disabled={connecting}
+                  loading={connecting}
                 />
               </View>
             )}
           />
+
+          <View style={styles.buttonContainer}>
+            {!scanning && (
+              <Button title="Relancer le scan" onPress={handleScan} />
+            )}
+            <Button title="Retour" onPress={handleBack} variant="secondary" />
+          </View>
         </View>
       )}
-
-      <View style={styles.buttonContainer}>
-        <Button
-          title={scanning ? 'Arrêter le scan' : 'Scanner les appareils'}
-          onPress={scanning ? () => setScanning(false) : handleScanDevices}
-          loading={scanning}
-        />
-        <Button
-          title="Retour"
-          onPress={() => router.back()}
-          variant="secondary"
-        />
-      </View>
     </View>
   );
 }
@@ -170,111 +268,124 @@ export default function MultiplayerSetupScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0e27',
-    padding: 20,
+    backgroundColor: colors.bg,
+    padding: spacing.xl,
     paddingTop: 60,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: spacing.xl,
   },
   title: {
     fontSize: 32,
-    fontWeight: '700',
-    color: '#fff',
-    marginTop: 16,
+    fontFamily: fonts.display,
+    color: colors.text,
+    marginTop: spacing.lg,
   },
   subtitle: {
     fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.7)',
-    marginTop: 8,
+    color: colors.textSecondary,
+    marginTop: spacing.sm,
   },
-  infoCard: {
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
-    borderRadius: 12,
-    padding: 16,
+  warningCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 24,
+    gap: spacing.md,
+    backgroundColor: colors.warningSoft,
+    borderWidth: 1,
+    borderColor: colors.warningBorder,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  warningText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.textSecondary,
+    lineHeight: 18,
+  },
+  choiceContainer: {
+    gap: spacing.md,
+  },
+  infoCard: {
+    backgroundColor: colors.primarySoft,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.md,
   },
   infoText: {
     flex: 1,
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.85)',
+    color: colors.textSecondary,
     lineHeight: 20,
   },
-  scanningContainer: {
+  centerContent: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 16,
+    gap: spacing.lg,
+    paddingHorizontal: spacing.xl,
+  },
+  waitingTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  scanContainer: {
+    flex: 1,
+  },
+  scanningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.lg,
   },
   scanningText: {
-    fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.7)',
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
+    fontSize: 15,
+    color: colors.textSecondary,
   },
   emptyText: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#fff',
-    marginBottom: 8,
+    color: colors.text,
+    textAlign: 'center',
   },
   emptySubtext: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: colors.textSecondary,
     textAlign: 'center',
     lineHeight: 20,
   },
-  devicesContainer: {
-    flex: 1,
-    marginBottom: 16,
-  },
-  devicesTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 12,
-  },
   deviceCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    ...shadow.card,
   },
   deviceInfo: {
     flex: 1,
-    marginRight: 12,
+    marginRight: spacing.md,
   },
   deviceName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#fff',
-    marginBottom: 4,
+    color: colors.text,
+    marginBottom: spacing.xs,
   },
   deviceId: {
     fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.45)',
+    color: colors.textMuted,
   },
   buttonContainer: {
-    gap: 12,
+    gap: spacing.md,
+    marginTop: spacing.md,
   },
 });

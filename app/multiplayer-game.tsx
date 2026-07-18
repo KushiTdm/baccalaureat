@@ -9,11 +9,12 @@ import Button from '../components/Button';
 import { validateWord } from '../services/api';
 import { bluetoothService, GameMessage } from '../services/bluetooth';
 import { GameResult } from '../store/gameStore';
+import { startsWithLetter } from '../utils/normalize';
+import { pickRandomLetter } from '../utils/letters';
+import { colors, fonts, radius, spacing, shadow } from '../constants/theme';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SAFE_AREA_HEIGHT = SCREEN_HEIGHT * 0.25;
-
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 export default function MultiplayerGameScreen() {
   const router = useRouter();
@@ -71,12 +72,7 @@ export default function MultiplayerGameScreen() {
 
   // Générer une nouvelle lettre qui n'a pas été utilisée
   const getNewLetter = useCallback(() => {
-    const usedLetters = roundHistory.map(r => r.letter);
-    const availableLetters = LETTERS.filter(l => !usedLetters.includes(l));
-    if (availableLetters.length === 0) {
-      return LETTERS[Math.floor(Math.random() * LETTERS.length)];
-    }
-    return availableLetters[Math.floor(Math.random() * availableLetters.length)];
+    return pickRandomLetter(roundHistory.map(r => r.letter));
   }, [roundHistory]);
 
   // Fonction pour valider les réponses et calculer le score
@@ -95,7 +91,7 @@ export default function MultiplayerGameScreen() {
       let points = 0;
 
       if (word) {
-        if (currentLetter && word.toLowerCase().startsWith(currentLetter.toLowerCase())) {
+        if (currentLetter && startsWithLetter(word, currentLetter)) {
           try {
             isValid = await validateWord(word, category.id);
             if (isValid) {
@@ -408,10 +404,10 @@ export default function MultiplayerGameScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0e27',
+    backgroundColor: colors.bg,
   },
   header: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: colors.surface,
     paddingTop: 60,
     paddingBottom: 20,
     paddingHorizontal: 20,
@@ -424,30 +420,30 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   roundBadge: {
-    backgroundColor: 'rgba(255, 215, 0, 0.15)',
+    backgroundColor: colors.goldSoft,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 215, 0, 0.3)',
+    borderColor: colors.goldBorder,
   },
   roundLabel: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#FFD700',
+    color: colors.gold,
   },
   opponentBadge: {
-    backgroundColor: 'rgba(0, 122, 255, 0.15)',
+    backgroundColor: colors.primarySoft,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
+    borderColor: colors.primaryBorder,
   },
   opponentLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#007AFF',
+    color: colors.primary,
   },
   letterContainer: {
     alignItems: 'center',
@@ -455,7 +451,7 @@ const styles = StyleSheet.create({
   },
   letterLabel: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.6)',
+    color: colors.textSecondary,
     marginBottom: 8,
     fontWeight: '600',
   },
@@ -463,47 +459,47 @@ const styles = StyleSheet.create({
     width: 70,
     height: 70,
     borderRadius: 35,
-    backgroundColor: 'rgba(0, 122, 255, 0.2)',
+    backgroundColor: colors.primarySoft,
     borderWidth: 3,
-    borderColor: '#007AFF',
+    borderColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   letter: {
     fontSize: 40,
     fontWeight: '800',
-    color: '#007AFF',
+    color: colors.primary,
   },
   progressContainer: {
     marginBottom: 16,
   },
   progressBar: {
     height: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: colors.border,
     borderRadius: 3,
     overflow: 'hidden',
     marginBottom: 6,
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#4caf50',
+    backgroundColor: colors.success,
     borderRadius: 3,
   },
   progressText: {
     fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.6)',
+    color: colors.textSecondary,
     textAlign: 'center',
   },
   opponentFinishedNotice: {
-    backgroundColor: 'rgba(255, 152, 0, 0.2)',
+    backgroundColor: colors.warningBorder,
     padding: 10,
     borderRadius: 10,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: '#ff9800',
+    borderColor: colors.warning,
   },
   opponentFinishedText: {
-    color: '#ff9800',
+    color: colors.warning,
     fontWeight: '600',
     textAlign: 'center',
   },
@@ -522,26 +518,26 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   hintBox: {
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    backgroundColor: colors.primarySoft,
     padding: 12,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
+    borderColor: colors.primaryBorder,
   },
   hintText: {
-    color: 'rgba(255, 255, 255, 0.8)',
+    color: colors.textSecondary,
     fontSize: 13,
     textAlign: 'center',
   },
   warningBox: {
-    backgroundColor: 'rgba(255, 152, 0, 0.1)',
+    backgroundColor: colors.warningSoft,
     padding: 12,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255, 152, 0, 0.3)',
+    borderColor: colors.warningBorder,
   },
   warningText: {
-    color: '#ff9800',
+    color: colors.warning,
     fontSize: 13,
     textAlign: 'center',
     fontWeight: '500',

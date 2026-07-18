@@ -26,10 +26,21 @@ export interface AuthUser {
   elo_rating: number;
   rank_position: number | null;
   win_rate: number;
+
+  // Stats détaillées (colonnes de stats-migration.sql, optionnelles)
+  best_round_score?: number;
+  best_game_score?: number;
+  total_valid_words?: number;
+
+  // Utilisateur local hors ligne (jamais synchronisé avec Supabase)
+  is_local?: boolean;
 }
 
 const STORAGE_KEY = '@petit_bac:device_id';
 const USER_STORAGE_KEY = '@petit_bac:user';
+// Clé séparée de USER_STORAGE_KEY : le user local ne doit jamais
+// écraser le cache d'un vrai compte Supabase.
+const LOCAL_USER_STORAGE_KEY = '@petit_bac:local_user';
 
 class AuthService {
   private currentDeviceId: string | null = null;
@@ -333,6 +344,107 @@ class AuthService {
     } catch (error: any) {
       console.error('❌ Erreur loginWithEmail:', error);
       throw error;
+    }
+  }
+
+  // ===== UTILISATEUR LOCAL (MODE HORS LIGNE) =====
+
+  /**
+   * Récupère l'utilisateur local persisté (ou null s'il n'existe pas).
+   */
+  async getLocalUser(): Promise<AuthUser | null> {
+    try {
+      const cached = await AsyncStorage.getItem(LOCAL_USER_STORAGE_KEY);
+      if (cached) {
+        return JSON.parse(cached);
+      }
+      return null;
+    } catch (error) {
+      console.error('❌ Erreur getLocalUser:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Fallback hors ligne : recharge l'utilisateur local persisté ou en crée
+   * un nouveau. Utilisé quand le login Supabase échoue (réseau/serveur).
+   * Ne touche jamais au cache du vrai compte (USER_STORAGE_KEY).
+   */
+  async createOrLoadLocalUser(): Promise<AuthUser> {
+    const existing = await this.getLocalUser();
+    if (existing && existing.id) {
+      console.log('📴 Utilisateur local rechargé:', existing.username);
+      return existing;
+    }
+
+    const localUser: AuthUser = {
+      id: `local-${Crypto.randomUUID()}`,
+      username: 'Joueur',
+      email: null,
+      avatar_url: null,
+      device_id: null,
+      auth_type: 'device',
+      has_set_username: true,
+      is_online: false,
+      created_at: new Date().toISOString(),
+      total_games_played: 0,
+      total_games_won: 0,
+      total_games_lost: 0,
+      total_games_draw: 0,
+      total_points: 0,
+      elo_rating: 0,
+      rank_position: null,
+      win_rate: 0,
+      best_round_score: 0,
+      best_game_score: 0,
+      total_valid_words: 0,
+      is_local: true,
+    };
+
+    await this.saveLocalUser(localUser);
+    console.log('📴 Utilisateur local créé:', localUser.id);
+    return localUser;
+  }
+
+  /**
+   * Modifie le pseudo de l'utilisateur local (aucun appel Supabase).
+   */
+  async setLocalUsername(username: string): Promise<AuthUser> {
+    if (!username || username.trim().length < 3) {
+      throw new Error('Le pseudo doit contenir au moins 3 caractères');
+    }
+    if (username.length > 20) {
+      throw new Error('Le pseudo ne peut pas dépasser 20 caractères');
+    }
+
+    const localUser = await this.createOrLoadLocalUser();
+    const updatedUser: AuthUser = {
+      ...localUser,
+      username: username.trim(),
+      has_set_username: true,
+    };
+
+    await this.saveLocalUser(updatedUser);
+    console.log('✅ Pseudo local mis à jour:', updatedUser.username);
+    return updatedUser;
+  }
+
+  /**
+   * Supprime l'utilisateur local (déconnexion en mode hors ligne).
+   */
+  async clearLocalUser(): Promise<void> {
+    try {
+      await AsyncStorage.removeItem(LOCAL_USER_STORAGE_KEY);
+    } catch (error) {
+      console.error('❌ Erreur clearLocalUser:', error);
+    }
+  }
+
+  private async saveLocalUser(user: AuthUser): Promise<void> {
+    try {
+      await AsyncStorage.setItem(LOCAL_USER_STORAGE_KEY, JSON.stringify(user));
+    } catch (error) {
+      console.error('❌ Erreur saveLocalUser:', error);
     }
   }
 

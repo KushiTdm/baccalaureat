@@ -2,9 +2,12 @@
 import { Platform } from 'react-native';
 
 // Import conditionnel de FileSystem (uniquement sur mobile)
+// API "legacy" : SDK 54 a introduit de nouvelles classes File/Directory et
+// déprécié writeAsStringAsync/readAsStringAsync/etc. de l'export racine.
+// On garde l'API legacy (même signatures) pour ne pas réécrire ce module.
 let FileSystem: any = null;
 if (Platform.OS !== 'web') {
-  FileSystem = require('expo-file-system');
+  FileSystem = require('expo-file-system/legacy');
 }
 
 const DICTIONARY_FILE_PATH = FileSystem 

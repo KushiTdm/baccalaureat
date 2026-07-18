@@ -43,7 +43,7 @@ export default function Button({
     >
       {loading ? (
         <ActivityIndicator
-          color={variant === 'secondary' ? colors.primary : '#fff'}
+          color={variant === 'secondary' ? colors.primary : colors.onPrimary}
           size="small"
         />
       ) : (
@@ -68,7 +68,7 @@ const styles = StyleSheet.create({
   button: {
     paddingVertical: 16,
     paddingHorizontal: 24,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 56,
@@ -83,11 +83,10 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     backgroundColor: colors.surface,
-    borderWidth: 1.5,
-    borderColor: colors.primaryBorder,
+    ...shadow.card,
   },
   disabledButton: {
-    opacity: 0.45,
+    backgroundColor: colors.disabled,
     shadowOpacity: 0,
     elevation: 0,
   },
@@ -105,12 +104,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   primaryText: {
-    color: '#fff',
+    color: colors.onPrimary,
   },
   secondaryText: {
     color: colors.primary,
   },
   disabledText: {
-    opacity: 0.8,
+    color: colors.onPrimary,
+    opacity: 1,
   },
 });

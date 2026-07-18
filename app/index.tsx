@@ -1,23 +1,16 @@
 // app/index.tsx
-import { View, Text, StyleSheet, Alert, ScrollView, Dimensions, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, Alert, ScrollView, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import Animated, {
   FadeIn,
   FadeInDown,
   FadeInUp,
-  SlideInRight,
-  SlideInLeft,
   BounceIn,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-  withRepeat,
-  withSequence,
-  withTiming,
-  interpolate,
 } from 'react-native-reanimated';
-import { Download, Wifi, WifiOff, Globe, Bluetooth, Zap, Sparkles, RefreshCw, AlertCircle } from 'lucide-react-native';
+import { Wifi, WifiOff, Globe, Bluetooth, Zap, Sparkles, RefreshCw, AlertCircle, Settings, Trophy } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { colors, gradients, fonts, radius, spacing, shadow } from '../constants/theme';
 
 // Services et stores
 import { getCategories, downloadDictionary, isOnline } from '../services/api';
@@ -25,61 +18,16 @@ import { isDictionaryDownloaded } from '../utils/storage';
 import { initOfflineDatabase, loadOfflineDictionary } from '../services/offline';
 import { useGameStore } from '../store/gameStore';
 import { useUserStore } from '../store/userStore';
+import { pickRandomLetter } from '../utils/letters';
+import { useSettingsStore, filterEnabledCategories } from '../store/settingsStore';
 
 // Composants
-import Button from '../components/Button';
-
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-
-// Particules flottantes en arrière-plan
-const FloatingParticle = ({ delay, duration, startX, startY }: any) => {
-  const translateY = useSharedValue(startY);
-  const opacity = useSharedValue(0);
-
-  useEffect(() => {
-    translateY.value = withRepeat(
-      withSequence(
-        withTiming(startY - 100, { duration }),
-        withTiming(startY, { duration })
-      ),
-      -1,
-      true
-    );
-
-    opacity.value = withRepeat(
-      withSequence(
-        withTiming(0.6, { duration: duration / 2 }),
-        withTiming(0.2, { duration: duration / 2 })
-      ),
-      -1,
-      true
-    );
-  }, []);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }],
-    opacity: opacity.value,
-  }));
-
-  return (
-    <Animated.View
-      style={[
-        styles.particle,
-        {
-          left: startX,
-          top: startY,
-        },
-        animatedStyle,
-      ]}
-    />
-  );
-};
+import AdBanner from '../components/AdBanner';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { startGame } = useGameStore();
-  const { user, isLoading: authLoading, login, needsUsername } = useUserStore();
+  const { user, isLoading: authLoading, login, loginOffline, needsUsername } = useUserStore();
 
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -88,11 +36,6 @@ export default function HomeScreen() {
   const [initializing, setInitializing] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
-
-  // Animations
-  const titleScale = useSharedValue(1);
-  const titleRotate = useSharedValue(0);
-  const glowPulse = useSharedValue(1);
 
   useEffect(() => {
     initializeApp();
@@ -104,48 +47,6 @@ export default function HomeScreen() {
       router.replace('/username-setup');
     }
   }, [authLoading, user, needsUsername]);
-
-  // Animations du titre
-  useEffect(() => {
-    titleScale.value = withRepeat(
-      withSequence(
-        withSpring(1.05, { damping: 2 }),
-        withSpring(1, { damping: 2 })
-      ),
-      -1,
-      true
-    );
-
-    titleRotate.value = withRepeat(
-      withSequence(
-        withTiming(2, { duration: 2000 }),
-        withTiming(-2, { duration: 2000 })
-      ),
-      -1,
-      true
-    );
-
-    glowPulse.value = withRepeat(
-      withSequence(
-        withTiming(1.3, { duration: 1500 }),
-        withTiming(1, { duration: 1500 })
-      ),
-      -1,
-      true
-    );
-  }, []);
-
-  const titleAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [
-      { scale: titleScale.value },
-      { rotate: `${titleRotate.value}deg` }
-    ],
-  }));
-
-  const glowAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: glowPulse.value }],
-    opacity: interpolate(glowPulse.value, [1, 1.3], [0.3, 0.6]),
-  }));
 
   async function initializeApp() {
     try {
@@ -174,6 +75,20 @@ export default function HomeScreen() {
     }
   }
 
+  async function handleContinueOffline() {
+    try {
+      setConnectionError(null);
+      // Utilisateur local persisté (fallback hors ligne, sans Supabase)
+      await loginOffline();
+      await checkStatus();
+    } catch (error: any) {
+      console.error('Erreur mode hors ligne:', error);
+      setConnectionError(error?.message || 'Impossible de démarrer en mode hors ligne');
+    } finally {
+      setInitializing(false);
+    }
+  }
+
   async function checkStatus() {
     const downloaded = await isDictionaryDownloaded();
     setHasOfflineDict(downloaded);
@@ -195,14 +110,14 @@ export default function HomeScreen() {
 
     setLoading(true);
     try {
-      const categories = await getCategories();
+      const categories = filterEnabledCategories(await getCategories());
       if (categories.length === 0) {
         Alert.alert('Erreur', 'Aucune catégorie disponible');
         return;
       }
 
-      const randomLetter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
-      startGame(randomLetter, categories);
+      const randomLetter = pickRandomLetter();
+      startGame(randomLetter, categories, useSettingsStore.getState().roundDurationSec);
       router.push('/game');
     } catch (error) {
       Alert.alert('Erreur', 'Impossible de charger les catégories');
@@ -265,9 +180,9 @@ export default function HomeScreen() {
     return (
       <View style={styles.loadingContainer}>
         <Animated.View entering={BounceIn.duration(800)}>
-          <Sparkles size={64} color="#007AFF" />
+          <Sparkles size={64} color={colors.primary} />
         </Animated.View>
-        <ActivityIndicator size="large" color="#007AFF" style={{ marginTop: 20 }} />
+        <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 20 }} />
         <Text style={styles.loadingText}>
           {retrying ? 'Nouvelle tentative...' : 'Chargement...'}
         </Text>
@@ -280,7 +195,7 @@ export default function HomeScreen() {
     return (
       <View style={styles.errorContainer}>
         <Animated.View entering={BounceIn.duration(800)}>
-          <AlertCircle size={80} color="#f44336" />
+          <AlertCircle size={80} color={colors.danger} />
         </Animated.View>
         <Text style={styles.errorTitle}>Erreur de connexion</Text>
         <Text style={styles.errorMessage}>
@@ -290,215 +205,173 @@ export default function HomeScreen() {
           <Text style={styles.errorDetailsLabel}>Détails :</Text>
           <Text style={styles.errorDetailsText}>{connectionError}</Text>
         </View>
-        <TouchableOpacity 
-          style={styles.retryButton} 
+        <TouchableOpacity
+          style={styles.retryButton}
           onPress={handleRetry}
           disabled={retrying}
         >
-          <RefreshCw 
-            size={20} 
-            color="#fff" 
-            style={retrying ? styles.spinningIcon : undefined} 
+          <RefreshCw
+            size={20}
+            color={colors.onPrimary}
+            style={retrying ? styles.spinningIcon : undefined}
           />
           <Text style={styles.retryButtonText}>
             {retrying ? 'Connexion...' : 'Réessayer'}
           </Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.offlineButton}
+          onPress={handleContinueOffline}
+          disabled={retrying}
+        >
+          <WifiOff size={20} color={colors.primary} />
+          <Text style={[styles.retryButtonText, styles.offlineButtonText]}>Continuer hors ligne</Text>
+        </TouchableOpacity>
         <Text style={styles.errorHelp}>
-          Vérifiez votre connexion internet et réessayez.
+          Vérifiez votre connexion internet et réessayez, ou continuez hors ligne avec un profil local.
         </Text>
       </View>
     );
   }
 
+  const initial = (user?.username || 'J').trim().charAt(0).toUpperCase();
+
   return (
     <View style={styles.container}>
-      {/* Gradient de fond animé */}
-      <Animated.View
-        entering={FadeIn.duration(1000)}
-        style={styles.backgroundGradient}
-      />
-
-      {/* Particules flottantes */}
-      <FloatingParticle delay={0} duration={4000} startX={50} startY={100} />
-      <FloatingParticle delay={500} duration={5000} startX={300} startY={200} />
-      <FloatingParticle delay={1000} duration={4500} startX={150} startY={400} />
-      <FloatingParticle delay={1500} duration={5500} startX={280} startY={500} />
-      <FloatingParticle delay={2000} duration={4200} startX={100} startY={300} />
-
       <ScrollView
+        style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
-        scrollEventThrottle={16}
       >
-        {/* En-tête avec animations */}
-        <Animated.View
-          entering={FadeInDown.delay(200).springify()}
-          style={styles.header}
-        >
-          {/* Glow effect derrière le titre */}
-          <Animated.View style={[styles.titleGlow, glowAnimatedStyle]} />
+        {/* En-tête : salutation + accès rapides */}
+        <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.greetingRow}>
+          <View>
+            <Text style={styles.greetingHello}>Bonjour 👋</Text>
+            <Text style={styles.greetingName}>{user?.username || 'Joueur'}</Text>
+          </View>
 
-          <Animated.View style={titleAnimatedStyle}>
-            <Text style={styles.title}>Petit Bac</Text>
-          </Animated.View>
-
-          <Animated.View entering={FadeIn.delay(400)}>
-            <Text style={styles.subtitle}>Jeu de Baccalauréat</Text>
-          </Animated.View>
-
-          {/* Décoration */}
-          <Animated.View
-            entering={BounceIn.delay(600)}
-            style={styles.decorativeCircle}
-          >
-            <Sparkles size={32} color="#FFD700" />
-          </Animated.View>
+          <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.iconButton} onPress={() => router.push('/leaderboard')}>
+              <Trophy size={19} color={colors.gold} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.iconButton} onPress={() => router.push('/settings')}>
+              <Settings size={19} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleProfile}>
+              <LinearGradient
+                colors={gradients.sunset}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.avatar}
+              >
+                <Text style={styles.avatarInitial}>{initial}</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
         </Animated.View>
 
-        {/* Carte de statut avec animation */}
-        <Animated.View
-          entering={SlideInLeft.delay(300).springify()}
-          style={styles.statusCard}
-        >
+        {/* Carte héros : lancer une nouvelle partie */}
+        <Animated.View entering={FadeInUp.delay(200).springify()} style={styles.heroWrapper}>
+          <LinearGradient
+            colors={gradients.primary}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 0.9, y: 1 }}
+            style={styles.heroCard}
+          >
+            <Text style={styles.heroWatermark}>B</Text>
+            <View style={styles.heroBadge}>
+              <Sparkles size={16} color={colors.onPrimary} />
+            </View>
+            <Text style={styles.heroTitle}>Nouvelle partie</Text>
+            <Text style={styles.heroSubtitle}>
+              Une lettre, plusieurs catégories, un chrono lancé.{'\n'}Trouvez vos mots avant la fin du temps !
+            </Text>
+            <TouchableOpacity
+              style={styles.heroButton}
+              onPress={handleStartGame}
+              disabled={loading}
+              activeOpacity={0.85}
+            >
+              {loading ? (
+                <ActivityIndicator color={colors.primary} />
+              ) : (
+                <>
+                  <Zap size={18} color={colors.primary} />
+                  <Text style={styles.heroButtonText}>Créer une partie</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </LinearGradient>
+        </Animated.View>
+
+        {/* Actions rapides : multijoueur */}
+        <Animated.View entering={FadeInUp.delay(300).springify()} style={styles.quickRow}>
+          <TouchableOpacity
+            style={styles.quickCard}
+            onPress={handleStartOnline}
+            disabled={!online}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.quickIconWrap, { backgroundColor: colors.primarySoft }]}>
+              <Globe size={22} color={colors.primary} />
+            </View>
+            <Text style={styles.quickTitle}>Jeu en ligne</Text>
+            <Text style={styles.quickSubtitle}>
+              {online ? 'Défiez un joueur' : 'Connexion requise'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.quickCard}
+            onPress={handleStartMultiplayer}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.quickIconWrap, { backgroundColor: colors.pinkSoft }]}>
+              <Bluetooth size={22} color={colors.pink} />
+            </View>
+            <Text style={styles.quickTitle}>Bluetooth</Text>
+            <Text style={styles.quickSubtitle}>Face à face, sans internet</Text>
+          </TouchableOpacity>
+        </Animated.View>
+
+        {/* Statut connexion + dictionnaire hors ligne */}
+        <Animated.View entering={FadeInUp.delay(400).springify()} style={styles.statusCard}>
           <View style={styles.statusRow}>
             {online ? (
-              <Wifi size={24} color="#4caf50" />
+              <Wifi size={18} color={colors.success} />
             ) : (
-              <WifiOff size={24} color="#f44336" />
+              <WifiOff size={18} color={colors.danger} />
             )}
-            <Text style={styles.statusText}>
-              {online ? 'En ligne' : 'Hors ligne'}
-            </Text>
-            <View style={[styles.statusDot, online && styles.statusDotOnline]} />
-          </View>
-
-          {hasOfflineDict && (
-            <Animated.View
-              entering={FadeInUp.delay(400)}
-              style={[styles.statusRow, { marginTop: 12 }]}
-            >
-              <Download size={24} color="#2196f3" />
-              <Text style={styles.statusText}>Dictionnaire prêt</Text>
-              <View style={styles.checkmark}>
-                <Text style={styles.checkmarkText}>✓</Text>
+            <Text style={styles.statusText}>{online ? 'En ligne' : 'Hors ligne'}</Text>
+            {hasOfflineDict && (
+              <View style={styles.statusBadge}>
+                <Text style={styles.statusBadgeText}>Dico prêt</Text>
               </View>
-            </Animated.View>
-          )}
+            )}
+          </View>
+
+          <TouchableOpacity onPress={handleDownloadDictionary} disabled={!online || downloading}>
+            {downloading ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <Text style={[styles.statusAction, !online && styles.statusActionDisabled]}>
+                {hasOfflineDict ? 'Mettre à jour' : 'Télécharger'}
+              </Text>
+            )}
+          </TouchableOpacity>
         </Animated.View>
-
-        {/* Carte d'information avec effet glassmorphism */}
-        <Animated.View
-          entering={SlideInRight.delay(400).springify()}
-          style={styles.infoCard}
-        >
-          <View style={styles.infoHeader}>
-            <Zap size={24} color="#007AFF" />
-            <Text style={styles.infoTitle}>Comment jouer ?</Text>
-          </View>
-
-          <View style={styles.infoContent}>
-            {[
-              'Une lettre aléatoire sera choisie',
-              'Trouvez un mot pour chaque catégorie',
-              'Vous avez 2 minutes pour tout remplir',
-              'Chaque mot valide = 10 points'
-            ].map((text, index) => (
-              <Animated.View
-                key={index}
-                entering={FadeInUp.delay(500 + index * 100)}
-                style={styles.infoItem}
-              >
-                <View style={styles.infoBullet} />
-                <Text style={styles.infoText}>{text}</Text>
-              </Animated.View>
-            ))}
-          </View>
-        </Animated.View>
-
-        {/* Boutons avec animations */}
-        <Animated.View
-          entering={FadeInUp.delay(600)}
-          style={styles.buttonContainer}
-        >
-          <Button
-            title="Jouer solo"
-            onPress={handleStartGame}
-            loading={loading}
-            icon={<Zap size={20} color="#fff" />}
-          />
-
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>Modes multijoueur</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <Button
-            title="Jeu en ligne"
-            onPress={handleStartOnline}
-            variant="secondary"
-            icon={<Globe size={20} color="#007AFF" />}
-            disabled={!online}
-          />
-
-          <Button
-            title="Bluetooth (local)"
-            onPress={handleStartMultiplayer}
-            variant="secondary"
-            icon={<Bluetooth size={20} color="#007AFF" />}
-          />
-
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <Button
-            title={hasOfflineDict ? 'Mettre à jour le dictionnaire' : 'Télécharger le dictionnaire'}
-            onPress={handleDownloadDictionary}
-            variant="secondary"
-            loading={downloading}
-            disabled={!online}
-            icon={<Download size={20} color="#007AFF" />}
-          />
-        </Animated.View>
-
-        {/* Messages d'avertissement */}
-        {!hasOfflineDict && (
-          <Animated.View
-            entering={FadeIn.delay(800)}
-            style={styles.warningCard}
-          >
-            <Text style={styles.warningText}>
-              💡 Téléchargez le dictionnaire pour jouer hors ligne
-            </Text>
-          </Animated.View>
-        )}
 
         {!online && (
-          <Animated.View
-            entering={FadeIn.delay(900)}
-            style={styles.warningCard}
-          >
+          <Animated.View entering={FadeIn.delay(500)} style={styles.warningCard}>
             <Text style={styles.warningText}>
               📡 Connexion requise pour le mode en ligne
             </Text>
           </Animated.View>
         )}
-
-        {/* Footer décoratif */}
-        <Animated.View
-          entering={FadeIn.delay(1000)}
-          style={styles.footer}
-        >
-          <Text style={styles.footerText}>Prêt à jouer ? 🎯</Text>
-          {user && (
-            <Text style={styles.footerSubtext}>
-              Connecté en tant que {user.username || 'Joueur'}
-            </Text>
-          )}
-        </Animated.View>
       </ScrollView>
+
+      {/* Bannière pub ancrée en bas (app gratuite) */}
+      <AdBanner />
     </View>
   );
 }
@@ -506,297 +379,295 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0e27',
-  },
-  backgroundGradient: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#0a0e27',
-  },
-  particle: {
-    position: 'absolute',
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(0, 122, 255, 0.4)',
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 8,
+    backgroundColor: colors.bg,
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: '#0a0e27',
+    backgroundColor: colors.bg,
     justifyContent: 'center',
     alignItems: 'center',
     gap: 16,
   },
   loadingText: {
     fontSize: 18,
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: colors.textSecondary,
     fontWeight: '600',
     marginTop: 8,
   },
+  scrollView: {
+    flex: 1,
+  },
   scrollContent: {
-    padding: 20,
+    padding: spacing.xl,
     paddingTop: 60,
     paddingBottom: 40,
+    gap: spacing.lg,
   },
-  header: {
+  // En-tête : salutation + avatar
+  greetingRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 40,
-    position: 'relative',
+    justifyContent: 'space-between',
   },
-  titleGlow: {
-    position: 'absolute',
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: '#007AFF',
-    opacity: 0.3,
-  },
-  title: {
-    fontSize: 56,
-    fontWeight: '900',
-    color: '#fff',
-    marginBottom: 8,
-    textShadowColor: 'rgba(59, 130, 246, 0.5)',
-    textShadowOffset: { width: 0, height: 8 },
-    textShadowRadius: 30,
-    letterSpacing: -1,
-  },
-  subtitle: {
-    fontSize: 18,
-    color: 'rgba(255, 255, 255, 0.7)',
+  greetingHello: {
+    fontSize: 15,
+    color: colors.textSecondary,
     fontWeight: '600',
-    letterSpacing: 1,
   },
-  decorativeCircle: {
-    marginTop: 20,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: 'rgba(255, 215, 0, 0.15)',
+  greetingName: {
+    fontSize: 24,
+    fontFamily: fonts.displayBold,
+    color: colors.text,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  iconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: 'rgba(255, 215, 0, 0.3)',
+    ...shadow.card,
   },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...shadow.card,
+  },
+  avatarInitial: {
+    fontSize: 18,
+    fontFamily: fonts.displayBold,
+    color: colors.onPrimary,
+  },
+  // Carte héros indigo (dégradé + lettre en filigrane, du design)
+  heroWrapper: {
+    borderRadius: radius.xl,
+    ...shadow.glow(colors.primary),
+  },
+  heroCard: {
+    borderRadius: radius.xl,
+    padding: 24,
+    overflow: 'hidden',
+  },
+  heroWatermark: {
+    position: 'absolute',
+    right: -10,
+    top: -22,
+    fontSize: 130,
+    lineHeight: 130,
+    fontFamily: fonts.displayBold,
+    color: colors.onPrimarySurface,
+  },
+  heroBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.onPrimarySurface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  heroTitle: {
+    fontSize: 24,
+    fontFamily: fonts.display,
+    color: colors.onPrimary,
+    marginBottom: 8,
+  },
+  heroSubtitle: {
+    fontSize: 14,
+    color: colors.onPrimarySecondary,
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  heroButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: colors.onPrimary,
+    paddingVertical: 12,
+    paddingHorizontal: 22,
+    borderRadius: radius.full,
+    minWidth: 170,
+  },
+  heroButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  // Actions rapides
+  quickRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  quickCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    ...shadow.card,
+  },
+  quickIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: spacing.md,
+  },
+  quickTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 2,
+  },
+  quickSubtitle: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  // Statut connexion / dictionnaire
   statusCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    ...shadow.card,
   },
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: spacing.sm,
   },
   statusText: {
-    fontSize: 16,
-    color: '#fff',
+    fontSize: 14,
+    color: colors.text,
     fontWeight: '600',
-    flex: 1,
   },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#f44336',
+  statusBadge: {
+    backgroundColor: colors.successSoft,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radius.full,
+    marginLeft: spacing.xs,
   },
-  statusDotOnline: {
-    backgroundColor: '#4caf50',
-    shadowColor: '#4caf50',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 6,
+  statusBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.success,
   },
-  checkmark: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(76, 175, 80, 0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
+  statusAction: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.primary,
   },
-  checkmarkText: {
-    fontSize: 16,
-    color: '#4caf50',
-    fontWeight: 'bold',
-  },
-  infoCard: {
-    backgroundColor: 'rgba(0, 122, 255, 0.08)',
-    borderRadius: 24,
-    padding: 24,
-    marginBottom: 32,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.2)',
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-  },
-  infoHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 20,
-  },
-  infoTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#fff',
-  },
-  infoContent: {
-    gap: 14,
-  },
-  infoItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  infoBullet: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#007AFF',
-    marginTop: 6,
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 4,
-  },
-  infoText: {
-    fontSize: 15,
-    color: 'rgba(255, 255, 255, 0.85)',
-    lineHeight: 22,
-    flex: 1,
-  },
-  buttonContainer: {
-    gap: 14,
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginVertical: 8,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  dividerText: {
-    fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.5)',
-    fontWeight: '600',
-    letterSpacing: 0.5,
+  statusActionDisabled: {
+    color: colors.textMuted,
   },
   warningCard: {
-    backgroundColor: 'rgba(255, 152, 0, 0.1)',
-    borderRadius: 14,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.md,
     padding: 16,
-    marginTop: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 152, 0, 0.3)',
+    borderColor: colors.warningBorder,
   },
   warningText: {
     textAlign: 'center',
     fontSize: 14,
-    color: '#ff9800',
+    color: colors.goldDeep,
     fontWeight: '600',
     lineHeight: 20,
   },
-  footer: {
-    alignItems: 'center',
-    marginTop: 32,
-    marginBottom: 20,
-    gap: 8,
-  },
-  footerText: {
-    fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.6)',
-    fontWeight: '600',
-  },
-  footerSubtext: {
-    fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.4)',
-    fontWeight: '500',
-  },
   errorContainer: {
     flex: 1,
-    backgroundColor: '#0a0e27',
+    backgroundColor: colors.bg,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
   },
   errorTitle: {
     fontSize: 28,
-    fontWeight: '800',
-    color: '#fff',
+    fontFamily: fonts.display,
+    color: colors.text,
     marginTop: 24,
     textAlign: 'center',
   },
   errorMessage: {
     fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: colors.textSecondary,
     marginTop: 12,
     textAlign: 'center',
     lineHeight: 24,
   },
   errorDetailsCard: {
-    backgroundColor: 'rgba(244, 67, 54, 0.1)',
-    borderRadius: 12,
+    backgroundColor: colors.dangerSoft,
+    borderRadius: radius.md,
     padding: 16,
     marginTop: 20,
     width: '100%',
     maxWidth: 350,
     borderWidth: 1,
-    borderColor: 'rgba(244, 67, 54, 0.3)',
+    borderColor: colors.dangerBorder,
   },
   errorDetailsLabel: {
     fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.5)',
+    color: colors.textSecondary,
     marginBottom: 4,
     fontWeight: '600',
   },
   errorDetailsText: {
     fontSize: 14,
-    color: '#f44336',
+    color: colors.danger,
     lineHeight: 20,
   },
   retryButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     paddingVertical: 14,
     paddingHorizontal: 32,
-    borderRadius: 12,
+    borderRadius: radius.lg,
     marginTop: 24,
     gap: 8,
+    ...shadow.glow(colors.primary),
   },
   retryButtonText: {
     fontSize: 16,
-    color: '#fff',
+    color: colors.onPrimary,
     fontWeight: '700',
+  },
+  offlineButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: radius.lg,
+    marginTop: 12,
+    gap: 8,
+    ...shadow.card,
+  },
+  offlineButtonText: {
+    color: colors.primary,
   },
   spinningIcon: {
     transform: [{ rotate: '360deg' }],
   },
   errorHelp: {
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.5)',
+    color: colors.textSecondary,
     marginTop: 16,
     textAlign: 'center',
   },

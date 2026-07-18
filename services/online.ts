@@ -1,5 +1,6 @@
 // services/online.ts - VERSION COMPLÈTE avec système de manches
 import { supabase } from '../lib/supabase';
+import { GAME_LETTERS } from '../utils/letters';
 
 export interface GameRoom {
   id: string;
@@ -113,7 +114,62 @@ class OnlineService {
     return code;
   }
 
-  async createRoom(playerName: string, letter: string): Promise<{ room: GameRoom; player: GameRoomPlayer }> {
+  // Insère un joueur de salle en renseignant user_id si possible ;
+  // retente sans la colonne si la migration n'est pas passée.
+  private async insertRoomPlayer(
+    roomId: string,
+    playerName: string,
+    isHost: boolean,
+    userId?: string | null
+  ): Promise<GameRoomPlayer> {
+    const base = { room_id: roomId, player_name: playerName, is_host: isHost };
+
+    let { data: player, error } = await supabase
+      .from('game_room_players')
+      .insert(userId ? { ...base, user_id: userId } : base)
+      .select()
+      .single();
+
+    if (error && userId) {
+      ({ data: player, error } = await supabase
+        .from('game_room_players')
+        .insert(base)
+        .select()
+        .single());
+    }
+
+    if (error || !player) {
+      throw new Error('Impossible de rejoindre la salle');
+    }
+    return player;
+  }
+
+  /**
+   * Renvoie le user_id de l'adversaire dans la room courante (pour l'ELO).
+   */
+  async getOpponentUserId(myPlayerId: string): Promise<string | null> {
+    try {
+      const { data: me } = await supabase
+        .from('game_room_players')
+        .select('room_id')
+        .eq('id', myPlayerId)
+        .single();
+      if (!me?.room_id) return null;
+
+      const { data: opponent } = await supabase
+        .from('game_room_players')
+        .select('user_id')
+        .eq('room_id', me.room_id)
+        .neq('id', myPlayerId)
+        .limit(1)
+        .maybeSingle();
+      return opponent?.user_id || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async createRoom(playerName: string, letter: string, userId?: string | null): Promise<{ room: GameRoom; player: GameRoomPlayer }> {
     const roomCode = this.generateRoomCode();
 
     const { data: room, error: roomError } = await supabase
@@ -132,26 +188,14 @@ class OnlineService {
       throw new Error('Impossible de créer la salle');
     }
 
-    const { data: player, error: playerError } = await supabase
-      .from('game_room_players')
-      .insert({
-        room_id: room.id,
-        player_name: playerName,
-        is_host: true,
-      })
-      .select()
-      .single();
-
-    if (playerError || !player) {
-      throw new Error('Impossible de rejoindre la salle');
-    }
+    const player = await this.insertRoomPlayer(room.id, playerName, true, userId);
 
     this.currentRoomId = room.id;
     this.currentPlayerId = player.id;
     return { room, player };
   }
 
-  async joinRoom(roomCode: string, playerName: string): Promise<{ room: GameRoom; player: GameRoomPlayer }> {
+  async joinRoom(roomCode: string, playerName: string, userId?: string | null): Promise<{ room: GameRoom; player: GameRoomPlayer }> {
     const { data: room, error: roomError } = await supabase
       .from('game_rooms')
       .select()
@@ -172,19 +216,7 @@ class OnlineService {
       throw new Error('La salle est pleine');
     }
 
-    const { data: player, error: playerError } = await supabase
-      .from('game_room_players')
-      .insert({
-        room_id: room.id,
-        player_name: playerName,
-        is_host: false,
-      })
-      .select()
-      .single();
-
-    if (playerError || !player) {
-      throw new Error('Impossible de rejoindre la salle');
-    }
+    const player = await this.insertRoomPlayer(room.id, playerName, false, userId);
 
     this.currentRoomId = room.id;
     this.currentPlayerId = player.id;
@@ -192,8 +224,8 @@ class OnlineService {
   }
 
   async getNextLetter(roomId: string): Promise<string> {
-    const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-    
+    const LETTERS = GAME_LETTERS;
+
     // Récupérer la room pour voir les lettres déjà utilisées
     const room = await this.getRoom(roomId);
     if (!room) throw new Error('Room introuvable');

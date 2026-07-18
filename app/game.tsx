@@ -1,19 +1,24 @@
 //app/game.tsx
-import { View, Text, StyleSheet, ScrollView, Alert, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Alert, KeyboardAvoidingView, Platform, Keyboard, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { Send } from 'lucide-react-native';
 import { useGameStore } from '../store/gameStore';
+import { useUserStore } from '../store/userStore';
+import { recordSoloGame } from '../services/stats';
 import InputWord from '../components/InputWord';
 import Timer from '../components/Timer';
 import Button from '../components/Button';
 import { validateWord } from '../services/api';
-import { colors, radius, spacing, shadow } from '../constants/theme';
+import { startsWithLetter } from '../utils/normalize';
+import { LinearGradient } from 'expo-linear-gradient';
+import { colors, gradients, fonts, radius, spacing, shadow } from '../constants/theme';
 
 export default function GameScreen() {
   const router = useRouter();
   const scrollViewRef = useRef<ScrollView>(null);
+  const inputRefs = useRef<(TextInput | null)[]>([]);
   const {
     currentLetter,
     categories,
@@ -70,7 +75,7 @@ export default function GameScreen() {
         const answer = state.answers.find((a) => a.categorieId === category.id);
         const word = answer?.word || '';
 
-        if (!word.trim() || !letter || !word.toLowerCase().startsWith(letter.toLowerCase())) {
+        if (!word.trim() || !letter || !startsWithLetter(word, letter)) {
           return {
             categorieId: category.id,
             categorieName: category.nom,
@@ -106,7 +111,12 @@ export default function GameScreen() {
 
       setResults(results);
       setScore(totalScore);
-      router.push('/results');
+
+      // Historique : sauvegarde en arrière-plan, jamais bloquante
+      recordSoloGame(useUserStore.getState().user?.id, letter || '', totalScore, results);
+
+      // replace : le retour arrière ne doit pas ramener sur une manche terminée
+      router.replace('/results');
     } catch (error) {
       submittedRef.current = false;
       Alert.alert('Erreur', 'Impossible de valider les réponses');
@@ -149,7 +159,12 @@ export default function GameScreen() {
 
           <Animated.View entering={FadeInUp.delay(300)} style={styles.progressContainer}>
             <View style={styles.progressBar}>
-              <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
+              <LinearGradient
+                colors={gradients.timer}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={[styles.progressFill, { width: `${progressPercent}%` }]}
+              />
             </View>
             <Text style={styles.progressText}>
               {filledCount}/{categories.length} catégories remplies
@@ -173,12 +188,15 @@ export default function GameScreen() {
             return (
               <InputWord
                 key={category.id}
+                ref={(el) => { inputRefs.current[index] = el; }}
                 index={index}
                 category={category.nom}
                 value={answer?.word || ''}
                 onChangeText={(text) => setAnswer(category.id, text)}
                 letter={currentLetter!}
                 editable={!submitting}
+                isLast={index === categories.length - 1}
+                onSubmitNext={() => inputRefs.current[index + 1]?.focus()}
               />
             );
           })}
@@ -188,7 +206,7 @@ export default function GameScreen() {
               title={submitting ? 'Validation...' : 'Terminer la partie'}
               onPress={handleSubmit}
               loading={submitting}
-              icon={<Send size={20} color="#fff" />}
+              icon={<Send size={20} color={colors.onPrimary} />}
             />
           </View>
 
@@ -205,16 +223,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
+  // Design "Variante A" : en-tête posé sur le fond, sans carte
   header: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.bg,
     paddingTop: 60,
-    paddingBottom: spacing.xl,
+    paddingBottom: spacing.lg,
     paddingHorizontal: spacing.xl,
-    borderBottomLeftRadius: radius.xl,
-    borderBottomRightRadius: radius.xl,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-    ...shadow.card,
   },
   headerRow: {
     flexDirection: 'row',
@@ -234,19 +248,17 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   letterCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: colors.primarySoft,
-    borderWidth: 3,
-    borderColor: colors.primary,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
-    ...shadow.glow(colors.primary),
+    ...shadow.card,
   },
   letter: {
-    fontSize: 40,
-    fontWeight: '800',
+    fontSize: 32,
+    fontFamily: fonts.displayBold,
     color: colors.primary,
   },
   timerContainer: {
@@ -258,19 +270,18 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   progressBar: {
-    height: 8,
-    backgroundColor: colors.surfaceStrong,
+    height: 7,
+    backgroundColor: colors.bgDeep,
     borderRadius: 4,
     overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
-    backgroundColor: colors.success,
     borderRadius: 4,
   },
   progressText: {
-    fontSize: 12,
-    color: colors.textMuted,
+    fontSize: 13,
+    color: colors.textSecondary,
     textAlign: 'center',
     fontWeight: '600',
   },

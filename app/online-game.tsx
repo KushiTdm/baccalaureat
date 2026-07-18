@@ -1,5 +1,5 @@
 // app/online-game.tsx - GAMEPLAY TEMPS RÉEL (socket.io) avec STOP simultané
-import { View, Text, StyleSheet, ScrollView, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Dimensions, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore';
@@ -7,8 +7,12 @@ import InputWord from '../components/InputWord';
 import Timer from '../components/Timer';
 import Button from '../components/Button';
 import { validateWord } from '../services/api';
+import { startsWithLetter } from '../utils/normalize';
 import { websocketService, RoundAnswerResult } from '../services/websocket';
+import { feedback } from '../services/feedback';
 import { Send, Zap, Users, Trophy, AlertCircle } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { colors, gradients, fonts, radius, spacing, shadow } from '../constants/theme';
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -30,6 +34,7 @@ export default function OnlineGameScreen() {
   const router = useRouter();
   const pulseAnim = useSharedValue(1);
   const shakeAnim = useSharedValue(0);
+  const inputRefs = useRef<(TextInput | null)[]>([]);
 
   const {
     currentLetter,
@@ -83,7 +88,7 @@ export default function OnlineGameScreen() {
         let points = 0;
 
         if (word) {
-          if (letter && word.toLowerCase().startsWith(letter.toLowerCase())) {
+          if (letter && startsWithLetter(word, letter)) {
             try {
               isValid = await validateWord(word, category.id);
             } catch (error) {
@@ -207,6 +212,9 @@ export default function OnlineGameScreen() {
 
         useGameStore.getState().endGame(); // stoppe le timer instantanément
 
+        // Son + vibration de STOP (respecte les réglages, no-op sur web)
+        feedback.stop();
+
         // shake visuel
         shakeAnim.value = withSequence(
           withTiming(10, { duration: 80 }),
@@ -299,12 +307,12 @@ export default function OnlineGameScreen() {
       <Animated.View entering={SlideInRight.springify()} style={styles.header}>
         <View style={styles.headerTop}>
           <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.roundBadge}>
-            <Trophy size={16} color="#FFD700" />
+            <Trophy size={16} color={colors.goldDeep} />
             <Text style={styles.roundLabel}>Manche {currentRound}</Text>
           </Animated.View>
 
           <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.opponentBadge}>
-            <Users size={16} color="#007AFF" />
+            <Users size={16} color={colors.primary} />
             <Text style={styles.opponentName}>{opponentName}</Text>
           </Animated.View>
         </View>
@@ -324,7 +332,12 @@ export default function OnlineGameScreen() {
 
         <Animated.View entering={FadeInUp.delay(500)} style={styles.progressContainer}>
           <View style={styles.progressBar}>
-            <Animated.View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
+            <LinearGradient
+              colors={gradients.timer}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={[styles.progressFill, { width: `${progressPercent}%` }]}
+            />
           </View>
           <Text style={styles.progressText}>
             {filledCount}/{categories.length} catégories
@@ -343,12 +356,15 @@ export default function OnlineGameScreen() {
           return (
             <Animated.View key={category.id} entering={FadeInDown.delay(600 + index * 50).springify()}>
               <InputWord
+                ref={(el) => { inputRefs.current[index] = el; }}
                 index={index}
                 category={category.nom}
                 value={answer?.word || ''}
                 onChangeText={(text) => setAnswer(category.id, text)}
                 letter={currentLetter}
                 editable={!busy}
+                isLast={index === categories.length - 1}
+                onSubmitNext={() => inputRefs.current[index + 1]?.focus()}
               />
             </Animated.View>
           );
@@ -357,7 +373,7 @@ export default function OnlineGameScreen() {
         <Animated.View entering={FadeInUp.delay(800)} style={styles.actionsContainer}>
           {reconnecting && (
             <View style={styles.hintBox}>
-              <AlertCircle size={16} color="#FF9800" />
+              <AlertCircle size={16} color={colors.warning} />
               <Text style={styles.hintText}>
                 Connexion perdue, reconnexion en cours...
               </Text>
@@ -366,7 +382,7 @@ export default function OnlineGameScreen() {
 
           {opponentLeft && !stopped && (
             <View style={styles.hintBox}>
-              <AlertCircle size={16} color="#FF9800" />
+              <AlertCircle size={16} color={colors.warning} />
               <Text style={styles.hintText}>
                 {opponentName} s'est déconnecté. Vous pouvez crier STOP pour terminer.
               </Text>
@@ -375,7 +391,7 @@ export default function OnlineGameScreen() {
 
           {stopped && (
             <Animated.View entering={BounceIn} style={[styles.opponentFinishedNotice, shakeStyle]}>
-              <Zap size={24} color="#ff9800" />
+              <Zap size={24} color={colors.warning} />
               <View style={styles.noticeTextContainer}>
                 <Text style={styles.opponentFinishedTitle}>
                   {stoppedReason === 'timeout'
@@ -397,12 +413,12 @@ export default function OnlineGameScreen() {
             variant={allFieldsFilled ? 'primary' : 'danger'}
             loading={busy}
             disabled={busy}
-            icon={<Send size={20} color="#fff" />}
+            icon={<Send size={20} color={colors.onPrimary} />}
           />
 
           {!allFieldsFilled && !busy && (
             <Animated.View entering={FadeIn.delay(1000)} style={styles.hintBox}>
-              <AlertCircle size={16} color="#FF9800" />
+              <AlertCircle size={16} color={colors.warning} />
               <Text style={styles.hintText}>
                 Crier STOP arrête la manche pour tout le monde immédiatement.
               </Text>
@@ -417,7 +433,7 @@ export default function OnlineGameScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0a0e27',
+    backgroundColor: colors.bg,
   },
   backgroundGradient: {
     position: 'absolute',
@@ -425,22 +441,14 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#0a0e27',
+    backgroundColor: colors.bg,
   },
+  // En-tête posé sur le fond clair (design "Variante A")
   header: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: colors.bg,
     paddingTop: 60,
-    paddingBottom: 24,
+    paddingBottom: 16,
     paddingHorizontal: 24,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
-    borderBottomWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
-    elevation: 10,
   },
   headerTop: {
     flexDirection: 'row',
@@ -451,33 +459,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(255, 215, 0, 0.1)',
+    backgroundColor: colors.goldSoft,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 215, 0, 0.3)',
+    borderRadius: radius.full,
   },
   roundLabel: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#FFD700',
+    color: colors.goldDeep,
   },
   opponentBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    backgroundColor: colors.primarySoft,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 122, 255, 0.3)',
+    borderRadius: radius.full,
   },
   opponentName: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#007AFF',
+    color: colors.primary,
   },
   letterTimerRow: {
     flexDirection: 'row',
@@ -490,35 +494,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   letterLabel: {
-    fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 12,
+    color: colors.textSecondary,
     marginBottom: 8,
-    fontWeight: '600',
-    letterSpacing: 1,
+    fontWeight: '700',
+    letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
   letterCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: 'rgba(0, 122, 255, 0.15)',
-    borderWidth: 3,
-    borderColor: '#007AFF',
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
-    shadowRadius: 12,
-    elevation: 8,
+    ...shadow.card,
   },
   letter: {
-    fontSize: 40,
-    fontWeight: '800',
-    color: '#007AFF',
-    textShadowColor: 'rgba(0, 122, 255, 0.5)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 8,
+    fontSize: 32,
+    fontFamily: fonts.displayBold,
+    color: colors.primary,
   },
   timerWrapper: {
     flex: 1,
@@ -528,20 +523,19 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   progressBar: {
-    height: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    height: 7,
+    backgroundColor: colors.bgDeep,
     borderRadius: 4,
     overflow: 'hidden',
     marginBottom: 8,
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#4caf50',
     borderRadius: 4,
   },
   progressText: {
-    fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 13,
+    color: colors.textSecondary,
     textAlign: 'center',
     fontWeight: '600',
   },
@@ -561,28 +555,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 16,
     padding: 20,
-    backgroundColor: 'rgba(255, 152, 0, 0.15)',
-    borderRadius: 16,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.lg,
     borderWidth: 2,
-    borderColor: '#ff9800',
-    shadowColor: '#ff9800',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    borderColor: colors.warning,
+    ...shadow.glow(colors.warning),
   },
   noticeTextContainer: {
     flex: 1,
   },
   opponentFinishedTitle: {
     fontSize: 16,
-    color: '#fff',
+    color: colors.text,
     fontWeight: '800',
     marginBottom: 4,
   },
   opponentFinishedText: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.8)',
+    color: colors.textSecondary,
     fontWeight: '500',
   },
   hintBox: {
@@ -590,15 +580,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     padding: 12,
-    backgroundColor: 'rgba(255, 152, 0, 0.1)',
-    borderRadius: 10,
+    backgroundColor: colors.warningSoft,
+    borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: 'rgba(255, 152, 0, 0.2)',
+    borderColor: colors.warningBorder,
   },
   hintText: {
     flex: 1,
     fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: colors.goldDeep,
     fontWeight: '500',
   },
 });
