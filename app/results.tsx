@@ -10,7 +10,7 @@ import { maybeShowInterstitial } from '../services/ads';
 import { feedback } from '../services/feedback';
 import { pickRandomLetter } from '../utils/letters';
 import { useSettingsStore } from '../store/settingsStore';
-import { CheckCircle, XCircle, Trophy, RotateCcw, Home } from 'lucide-react-native';
+import { CheckCircle, Trophy, RotateCcw, Home } from 'lucide-react-native';
 import { colors, fonts, radius, spacing, shadow } from '../constants/theme';
 
 export default function ResultsScreen() {
@@ -72,10 +72,13 @@ export default function ResultsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Animated.View entering={BounceIn.duration(600)} style={styles.header}>
-          <View style={styles.trophyCircle}>
-            <Trophy size={48} color={colors.gold} />
+          <Text style={styles.meta}>
+            Manche terminée{currentLetter ? ` · Lettre ${currentLetter.toUpperCase()}` : ''}
+          </Text>
+          <View style={styles.headlineRow}>
+            <Trophy size={26} color={colors.gold} />
+            <Text style={styles.title}>{score > 0 ? 'Bien joué !' : 'Manche terminée'}</Text>
           </View>
-          <Text style={styles.title}>Résultats</Text>
           <View style={styles.scoreContainer}>
             <Text style={styles.scoreLabel}>Score</Text>
             <Text style={styles.score}>{score}</Text>
@@ -89,43 +92,40 @@ export default function ResultsScreen() {
           </View>
         </Animated.View>
 
-        <View style={styles.resultsContainer}>
-          {results.map((result, index) => (
-            <Animated.View
-              key={index}
-              entering={FadeInDown.delay(200 + index * 60).springify()}
-              style={[
-                styles.resultCard,
-                result.isValid ? styles.resultCardValid : result.word ? styles.resultCardInvalid : null,
-              ]}
-            >
-              <View style={styles.resultHeader}>
-                <Text style={styles.category}>{result.categorieName}</Text>
-                {result.isValid ? (
-                  <CheckCircle size={22} color={colors.success} />
-                ) : (
-                  <XCircle size={22} color={result.word ? colors.danger : colors.textMuted} />
-                )}
-              </View>
-
-              {result.word ? (
-                <View style={styles.answerContainer}>
-                  <Text style={styles.word}>{result.word}</Text>
+        {/* Détail par catégorie : une seule carte, lignes séparées par un filet (maquette) */}
+        <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.detailCard}>
+          <Text style={styles.detailTitle}>Détail</Text>
+          {results.map((result, index) => {
+            const pointsLabel = result.isValid ? `+${result.points}` : '0';
+            const pointsStyle = result.isValid
+              ? styles.detailPointsValid
+              : result.word
+                ? styles.detailPointsInvalid
+                : styles.detailPointsEmpty;
+            return (
+              <View
+                key={index}
+                style={[
+                  styles.detailRow,
+                  index === results.length - 1 && styles.detailRowLast,
+                ]}
+              >
+                <Text style={styles.detailCategory} numberOfLines={1}>
+                  {result.categorieName}
+                </Text>
+                <View style={styles.detailAnswerGroup}>
                   <Text
-                    style={[
-                      styles.points,
-                      result.isValid ? styles.validPoints : styles.invalidPoints,
-                    ]}
+                    style={result.word ? styles.detailWord : styles.detailWordEmpty}
+                    numberOfLines={1}
                   >
-                    {result.isValid ? `+${result.points}` : '0'} pts
+                    {result.word || '—'}
                   </Text>
+                  <Text style={[styles.detailPoints, pointsStyle]}>{pointsLabel}</Text>
                 </View>
-              ) : (
-                <Text style={styles.noAnswer}>Pas de réponse</Text>
-              )}
-            </Animated.View>
-          ))}
-        </View>
+              </View>
+            );
+          })}
+        </Animated.View>
 
         <Animated.View entering={FadeInUp.delay(400)} style={styles.buttonContainer}>
           <Button
@@ -164,23 +164,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.xxl,
   },
-  trophyCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: colors.goldSoft,
-    borderWidth: 2,
-    borderColor: colors.goldBorder,
-    justifyContent: 'center',
+  meta: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    marginBottom: spacing.sm,
+  },
+  headlineRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.lg,
-    ...shadow.glow(colors.gold),
+    gap: spacing.sm,
+    marginBottom: spacing.xl,
   },
   title: {
-    fontSize: 32,
-    fontFamily: fonts.display,
+    fontSize: 28,
+    fontFamily: fonts.displayBold,
     color: colors.text,
-    marginBottom: spacing.xl,
   },
   scoreContainer: {
     backgroundColor: colors.surface,
@@ -223,67 +222,79 @@ const styles = StyleSheet.create({
     color: colors.success,
     fontWeight: '700',
   },
-  resultsContainer: {
-    gap: spacing.md,
-    marginBottom: spacing.xxl,
-  },
-  resultCard: {
+  // Détail : une seule carte, lignes séparées par un filet (maquette "Résultats")
+  detailCard: {
     backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    padding: spacing.lg,
-    borderWidth: 1.5,
-    borderColor: 'transparent',
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    marginBottom: spacing.xxl,
     ...shadow.card,
   },
-  resultCardValid: {
-    borderColor: colors.successSoft,
-  },
-  resultCardInvalid: {
-    borderColor: colors.dangerBorder,
-  },
-  resultHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-  },
-  category: {
-    fontSize: 13,
+  detailTitle: {
+    fontSize: 12,
     fontWeight: '700',
     color: colors.textSecondary,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
+    paddingVertical: spacing.md,
   },
-  answerContainer: {
+  detailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingVertical: spacing.md,
+    borderTopWidth: 0.5,
+    borderTopColor: colors.borderLight,
+    gap: spacing.md,
   },
-  word: {
-    fontSize: 18,
+  detailRowLast: {
+    paddingBottom: spacing.sm,
+  },
+  detailCategory: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    color: colors.textSecondary,
+  },
+  detailAnswerGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    maxWidth: '62%',
+  },
+  detailWord: {
+    fontSize: 16,
     color: colors.text,
-    fontWeight: '600',
+    fontWeight: '700',
+    flexShrink: 1,
   },
-  points: {
+  detailWordEmpty: {
+    fontSize: 16,
+    color: colors.textMuted,
+    flexShrink: 1,
+  },
+  detailPoints: {
     fontSize: 13,
     fontWeight: '700',
     paddingHorizontal: 9,
     paddingVertical: 3,
     borderRadius: 8,
     overflow: 'hidden',
+    textAlign: 'center',
+    minWidth: 38,
   },
-  validPoints: {
+  detailPointsValid: {
     color: colors.success,
     backgroundColor: colors.successSoft,
   },
-  invalidPoints: {
+  detailPointsInvalid: {
     color: colors.danger,
     backgroundColor: colors.dangerSoft,
   },
-  noAnswer: {
-    fontSize: 14,
+  detailPointsEmpty: {
     color: colors.textMuted,
-    fontStyle: 'italic',
+    backgroundColor: colors.surfaceStrong,
   },
   buttonContainer: {
     marginTop: spacing.sm,

@@ -1,6 +1,5 @@
 // services/online.ts - VERSION COMPLÈTE avec système de manches
 import { supabase } from '../lib/supabase';
-import { GAME_LETTERS } from '../utils/letters';
 
 export interface GameRoom {
   id: string;
@@ -180,6 +179,10 @@ class OnlineService {
         letter: letter,
         status: 'waiting',
         current_round_number: 1,
+        // Amorce le pool de lettres serveur (game-actions/pickServerLetter)
+        // avec la 1ère lettre déjà tirée, pour qu'elle ne puisse pas
+        // ressortir à la manche 2 avant que les 20 lettres soient épuisées.
+        used_letters: [letter],
       })
       .select()
       .single();
@@ -221,43 +224,6 @@ class OnlineService {
     this.currentRoomId = room.id;
     this.currentPlayerId = player.id;
     return { room, player };
-  }
-
-  async getNextLetter(roomId: string): Promise<string> {
-    const LETTERS = GAME_LETTERS;
-
-    // Récupérer la room pour voir les lettres déjà utilisées
-    const room = await this.getRoom(roomId);
-    if (!room) throw new Error('Room introuvable');
-
-    const usedLetters = room.used_letters || [];
-    const availableLetters = LETTERS.filter(l => !usedLetters.includes(l));
-
-    // Si toutes les lettres ont été utilisées, réinitialiser
-    if (availableLetters.length === 0) {
-      console.log('🔄 Toutes les lettres utilisées, réinitialisation');
-      await supabase
-        .from('game_rooms')
-        .update({ used_letters: [] })
-        .eq('id', roomId);
-      
-      // Choisir une lettre aléatoire parmi toutes
-      return LETTERS[Math.floor(Math.random() * LETTERS.length)];
-    }
-
-    // Choisir une lettre aléatoire parmi les disponibles
-    const newLetter = availableLetters[Math.floor(Math.random() * availableLetters.length)];
-    
-    // Ajouter la lettre aux lettres utilisées
-    const updatedUsedLetters = [...usedLetters, newLetter];
-    await supabase
-      .from('game_rooms')
-      .update({ used_letters: updatedUsedLetters })
-      .eq('id', roomId);
-
-    console.log('🔤 New letter:', newLetter, '| Used:', updatedUsedLetters.length, '/', LETTERS.length);
-    
-    return newLetter;
   }
 
   async setPlayerReady(playerId: string, ready: boolean): Promise<void> {

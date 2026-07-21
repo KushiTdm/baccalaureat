@@ -18,9 +18,12 @@ import { colors, fonts, radius, spacing } from '../constants/theme';
 
 type TimerProps = {
   onTimeUp: () => void;
+  // "Variante A / Liste" du design : juste le chiffre coloré, sans icône ni
+  // barre (l'écran affiche déjà sa propre barre de progression catégories).
+  compact?: boolean;
 };
 
-export default function Timer({ onTimeUp }: TimerProps) {
+export default function Timer({ onTimeUp, compact = false }: TimerProps) {
   const { timeRemaining, roundDurationSec, isPlaying } = useGameStore();
 
   // Ref pour ne jamais recréer l'interval quand le parent re-render
@@ -93,6 +96,16 @@ export default function Timer({ onTimeUp }: TimerProps) {
 
   const tint = isCritical ? colors.danger : isUrgent ? colors.warning : colors.primary;
 
+  if (compact) {
+    return (
+      <Animated.View style={pulseStyle}>
+        <Text style={[styles.timeCompact, { color: tint }]}>
+          {String(minutes).padStart(2, '0')}:{String(seconds).padStart(2, '0')}
+        </Text>
+      </Animated.View>
+    );
+  }
+
   return (
     <Animated.View style={[styles.container, pulseStyle]}>
       <View style={styles.timeRow}>
@@ -131,6 +144,14 @@ const styles = StyleSheet.create({
     fontFamily: fonts.displayBold,
     fontVariant: ['tabular-nums'],
     letterSpacing: 0.5,
+  },
+  // Chiffre seul (maquette "Variante A") : pas d'icône, pas de barre
+  timeCompact: {
+    fontSize: 30,
+    fontFamily: fonts.displayBold,
+    fontVariant: ['tabular-nums'],
+    letterSpacing: 0.5,
+    textAlign: 'right',
   },
   track: {
     width: '100%',

@@ -17,6 +17,16 @@ import { userService, LeaderboardEntry } from '../services/user';
 import { useUserStore } from '../store/userStore';
 import { colors, fonts, radius, spacing, shadow } from '../constants/theme';
 
+// Palette d'accents pour les avatars (rotation par rang, purement visuelle)
+const AVATAR_COLORS = [
+  colors.pink,
+  colors.blue,
+  colors.greenLight,
+  colors.orangeLight,
+  colors.purple,
+  colors.peach,
+];
+
 export default function LeaderboardScreen() {
   const router = useRouter();
   const { user } = useUserStore();
@@ -50,6 +60,10 @@ export default function LeaderboardScreen() {
     return colors.textMuted;
   };
 
+  // Avatars colorés (maquette) : palette d'accents tournante par rang
+  const avatarColor = (index: number) =>
+    AVATAR_COLORS[index % AVATAR_COLORS.length];
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -57,7 +71,6 @@ export default function LeaderboardScreen() {
           <ArrowLeft size={24} color={colors.primary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Classement</Text>
-        <View style={styles.backButton} />
       </View>
 
       {loading ? (
@@ -95,46 +108,66 @@ export default function LeaderboardScreen() {
             <Text style={styles.podiumText}>Top {entries.length} joueurs</Text>
           </Animated.View>
 
-          {/* En-tête des colonnes */}
-          <View style={styles.columnsHeader}>
-            <Text style={[styles.columnLabel, styles.rankColumn]}>#</Text>
-            <Text style={[styles.columnLabel, styles.nameColumn]}>Joueur</Text>
-            <Text style={[styles.columnLabel, styles.statColumn]}>ELO</Text>
-            <Text style={[styles.columnLabel, styles.statColumn]}>Victoires</Text>
-          </View>
-
-          {entries.map((entry, index) => {
-            const rank = index + 1;
-            const isMe = !!user?.id && entry.id === user.id;
-            return (
-              <Animated.View
-                key={entry.id}
-                entering={FadeInDown.delay(Math.min(index, 10) * 50).springify()}
-                style={[styles.row, isMe && styles.rowMe]}
-              >
-                <View style={styles.rankColumn}>
+          <View style={styles.listCard}>
+            {entries.map((entry, index) => {
+              const rank = index + 1;
+              const isMe = !!user?.id && entry.id === user.id;
+              const initial = entry.username?.trim().charAt(0).toUpperCase() || '?';
+              return (
+                <Animated.View
+                  key={entry.id}
+                  entering={FadeInDown.delay(Math.min(index, 10) * 50).springify()}
+                  style={[
+                    styles.row,
+                    isMe && styles.rowMe,
+                    index === entries.length - 1 && styles.rowLast,
+                  ]}
+                >
                   <Text style={[styles.rankText, { color: rankColor(rank) }, isMe && styles.textOnMe]}>
                     {rank}
                   </Text>
-                </View>
-                <View style={styles.nameColumn}>
-                  <Text
-                    style={[styles.username, isMe && styles.usernameMe]}
-                    numberOfLines={1}
-                  >
-                    {entry.username}
-                    {isMe ? ' (vous)' : ''}
+
+                  <View style={[styles.avatar, { backgroundColor: avatarColor(index) }, isMe && styles.avatarMe]}>
+                    <Text style={[styles.avatarText, isMe && styles.avatarTextMe]}>{initial}</Text>
+                  </View>
+
+                  <View style={styles.nameColumn}>
+                    <Text
+                      style={[styles.username, isMe && styles.usernameMe]}
+                      numberOfLines={1}
+                    >
+                      {isMe ? 'Toi' : entry.username}
+                    </Text>
+                    <Text style={[styles.victoriesText, isMe && styles.textOnMeMuted]}>
+                      {entry.total_games_won} victoire{entry.total_games_won > 1 ? 's' : ''}
+                    </Text>
+                  </View>
+
+                  <Text style={[styles.eloValue, isMe && styles.textOnMe]}>
+                    {entry.elo_rating}
                   </Text>
+                </Animated.View>
+              );
+            })}
+          </View>
+
+          {user && (
+            <View style={styles.statsSection}>
+              <Text style={styles.statsCaption}>Tes stats</Text>
+              <View style={styles.statsRow}>
+                <View style={styles.statCard}>
+                  <Text style={styles.statCardValue}>{user.total_games_played}</Text>
+                  <Text style={styles.statCardLabel}>Parties</Text>
                 </View>
-                <Text style={[styles.statValue, styles.statColumn, styles.eloValue, isMe && styles.textOnMe]}>
-                  {entry.elo_rating}
-                </Text>
-                <Text style={[styles.statValue, styles.statColumn, isMe && styles.textOnMe]}>
-                  {entry.total_games_won}
-                </Text>
-              </Animated.View>
-            );
-          })}
+                <View style={styles.statCard}>
+                  <Text style={[styles.statCardValue, styles.statCardValueSuccess]}>
+                    {user.total_games_won}
+                  </Text>
+                  <Text style={styles.statCardLabel}>Victoires</Text>
+                </View>
+              </View>
+            </View>
+          )}
         </ScrollView>
       )}
     </View>
@@ -147,22 +180,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     paddingTop: 60,
     paddingHorizontal: spacing.xl,
     paddingBottom: spacing.lg,
   },
+  // Chevron nu au-dessus du grand titre (cohérent avec Réglages)
   backButton: {
-    width: 44,
-    height: 44,
+    width: 36,
+    height: 36,
     justifyContent: 'center',
+    marginLeft: -6,
+    marginBottom: spacing.xs,
   },
   headerTitle: {
-    fontSize: 24,
-    fontFamily: fonts.display,
+    fontSize: 30,
+    fontFamily: fonts.displayBold,
     color: colors.text,
+    letterSpacing: -0.3,
   },
   centerContent: {
     flex: 1,
@@ -221,40 +255,57 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.goldDeep,
   },
-  columnsHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  // Liste : une seule carte, lignes séparées par un filet (maquette "Classement")
+  listCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xs,
-  },
-  columnLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    ...shadow.card,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+    gap: spacing.md,
     paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    ...shadow.card,
+    borderBottomWidth: 0.5,
+    borderBottomColor: colors.borderLight,
   },
-  // "Ta ligne" du design : carte indigo pleine, textes blancs
+  rowLast: {
+    borderBottomWidth: 0,
+  },
+  // "Ta ligne" du design : pilule indigo pleine, textes blancs, en pleine largeur
   rowMe: {
     backgroundColor: colors.primary,
+    borderBottomWidth: 0,
+    borderRadius: radius.md,
+    marginHorizontal: -spacing.lg,
+    paddingHorizontal: spacing.lg,
     ...shadow.glow(colors.primary),
   },
-  rankColumn: {
-    width: 34,
-  },
   rankText: {
+    width: 22,
     fontSize: 16,
     fontFamily: fonts.displayBold,
     fontVariant: ['tabular-nums'],
+  },
+  // Avatar coloré avec initiale (maquette)
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarMe: {
+    backgroundColor: colors.surface,
+  },
+  avatarText: {
+    fontSize: 16,
+    fontFamily: fonts.displayBold,
+    color: colors.onPrimary,
+  },
+  avatarTextMe: {
+    color: colors.primary,
   },
   nameColumn: {
     flex: 1,
@@ -262,27 +313,66 @@ const styles = StyleSheet.create({
   },
   username: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '700',
     color: colors.text,
   },
   usernameMe: {
     color: colors.onPrimary,
     fontWeight: '800',
   },
-  statColumn: {
-    width: 68,
-    textAlign: 'center',
-  },
-  statValue: {
-    fontSize: 14,
-    fontWeight: '700',
+  victoriesText: {
+    fontSize: 12,
     color: colors.textSecondary,
-    fontVariant: ['tabular-nums'],
+    marginTop: 2,
+  },
+  textOnMeMuted: {
+    color: colors.onPrimarySecondary,
   },
   eloValue: {
+    fontSize: 18,
+    fontFamily: fonts.displayBold,
     color: colors.primary,
+    fontVariant: ['tabular-nums'],
   },
   textOnMe: {
     color: colors.onPrimary,
+  },
+  // "Tes stats" (maquette) : deux cartes sous la liste
+  statsSection: {
+    marginTop: spacing.xl,
+  },
+  statsCaption: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: spacing.sm,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.lg,
+    alignItems: 'center',
+    ...shadow.card,
+  },
+  statCardValue: {
+    fontSize: 26,
+    fontFamily: fonts.displayBold,
+    color: colors.text,
+    marginBottom: 2,
+  },
+  statCardValueSuccess: {
+    color: colors.success,
+  },
+  statCardLabel: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    fontWeight: '500',
   },
 });

@@ -11,7 +11,8 @@ import { bluetoothService, GameMessage } from '../services/bluetooth';
 import { GameResult } from '../store/gameStore';
 import { startsWithLetter } from '../utils/normalize';
 import { pickRandomLetter } from '../utils/letters';
-import { colors, fonts, radius, spacing, shadow } from '../constants/theme';
+import { LinearGradient } from 'expo-linear-gradient';
+import { colors, fonts, gradients, radius, spacing, shadow } from '../constants/theme';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SAFE_AREA_HEIGHT = SCREEN_HEIGHT * 0.25;
@@ -29,11 +30,7 @@ export default function MultiplayerGameScreen() {
     endGame,
     opponentName,
     currentRound,
-    totalScore,
-    opponentTotalScore,
     roundHistory,
-    addRoundToHistory,
-    updateTotalScores,
     startNewRound,
     startMultiplayerGame,
     isHost,
@@ -241,15 +238,21 @@ export default function MultiplayerGameScreen() {
   async function handleTimeUp() {
     if (hasSubmittedRef.current) return;
     hasSubmittedRef.current = true;
-    
+
     endGame();
-    
-    // Envoyer STOP_GAME pour arrêter l'adversaire
-    await bluetoothService.sendMessage({
-      type: 'STOP_GAME',
-      data: { reason: 'time_up' },
-    });
-    
+
+    // Envoyer STOP_GAME pour arrêter l'adversaire. Si l'envoi échoue
+    // (connexion perdue), on valide quand même localement : l'adversaire a
+    // son propre timer et s'arrêtera de son côté.
+    try {
+      await bluetoothService.sendMessage({
+        type: 'STOP_GAME',
+        data: { reason: 'time_up' },
+      });
+    } catch (e) {
+      console.warn('BLE: STOP_GAME non envoyé', e);
+    }
+
     // Pas de pénalité car c'est le temps qui a expiré
     await submitMyResults(false);
   }
@@ -283,13 +286,19 @@ export default function MultiplayerGameScreen() {
   async function processSubmit(stoppedEarly: boolean) {
     setSubmitting(true);
     endGame();
-    
-    // Envoyer STOP_GAME pour arrêter l'adversaire immédiatement
-    await bluetoothService.sendMessage({
-      type: 'STOP_GAME',
-      data: { reason: 'player_submit' },
-    });
-    
+
+    // Envoyer STOP_GAME pour arrêter l'adversaire immédiatement. En cas
+    // d'échec d'envoi, on continue : mieux vaut montrer nos résultats locaux
+    // que de bloquer l'écran.
+    try {
+      await bluetoothService.sendMessage({
+        type: 'STOP_GAME',
+        data: { reason: 'player_submit' },
+      });
+    } catch (e) {
+      console.warn('BLE: STOP_GAME non envoyé', e);
+    }
+
     await submitMyResults(stoppedEarly);
   }
 
@@ -325,7 +334,12 @@ export default function MultiplayerGameScreen() {
 
           <View style={styles.progressContainer}>
             <View style={styles.progressBar}>
-              <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
+              <LinearGradient
+                colors={gradients.timer}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={[styles.progressFill, { width: `${progressPercent}%` }]}
+              />
             </View>
             <Text style={styles.progressText}>
               {filledCount}/{categories.length} catégories
@@ -406,13 +420,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
+  // En-tête posé sur le fond, sans carte (cohérent avec game.tsx / online-game.tsx)
   header: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.bg,
     paddingTop: 60,
     paddingBottom: 20,
     paddingHorizontal: 20,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
   },
   headerTop: {
     flexDirection: 'row',
@@ -422,27 +435,23 @@ const styles = StyleSheet.create({
   roundBadge: {
     backgroundColor: colors.goldSoft,
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.goldBorder,
+    paddingVertical: 8,
+    borderRadius: radius.full,
   },
   roundLabel: {
     fontSize: 14,
     fontWeight: '700',
-    color: colors.gold,
+    color: colors.goldDeep,
   },
   opponentBadge: {
     backgroundColor: colors.primarySoft,
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.primaryBorder,
+    paddingVertical: 8,
+    borderRadius: radius.full,
   },
   opponentLabel: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     color: colors.primary,
   },
   letterContainer: {
@@ -456,50 +465,49 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   letterCircle: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: colors.primarySoft,
-    borderWidth: 3,
-    borderColor: colors.primary,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
+    ...shadow.card,
   },
   letter: {
-    fontSize: 40,
-    fontWeight: '800',
+    fontSize: 32,
+    fontFamily: fonts.displayBold,
     color: colors.primary,
   },
   progressContainer: {
     marginBottom: 16,
   },
   progressBar: {
-    height: 6,
-    backgroundColor: colors.border,
-    borderRadius: 3,
+    height: 7,
+    backgroundColor: colors.bgDeep,
+    borderRadius: 4,
     overflow: 'hidden',
-    marginBottom: 6,
+    marginBottom: 8,
   },
   progressFill: {
     height: '100%',
-    backgroundColor: colors.success,
-    borderRadius: 3,
+    borderRadius: 4,
   },
   progressText: {
-    fontSize: 12,
+    fontSize: 13,
     color: colors.textSecondary,
     textAlign: 'center',
+    fontWeight: '600',
   },
   opponentFinishedNotice: {
-    backgroundColor: colors.warningBorder,
+    backgroundColor: colors.warningSoft,
     padding: 10,
     borderRadius: 10,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: colors.warning,
+    borderColor: colors.warningBorder,
   },
   opponentFinishedText: {
-    color: colors.warning,
+    color: colors.goldDeep,
     fontWeight: '600',
     textAlign: 'center',
   },
@@ -537,7 +545,7 @@ const styles = StyleSheet.create({
     borderColor: colors.warningBorder,
   },
   warningText: {
-    color: colors.warning,
+    color: colors.goldDeep,
     fontSize: 13,
     textAlign: 'center',
     fontWeight: '500',

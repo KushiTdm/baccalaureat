@@ -19,7 +19,17 @@ import { Platform } from 'react-native';
 
 // Types exportés (API conservée pour les écrans multiplayer-*)
 export type GameMessage = {
-  type: 'GAME_START' | 'STOP_GAME' | 'ANSWER_SUBMIT' | 'GAME_END' | 'SYNC_DATA' | 'FINISH_GAME' | 'NEXT_ROUND';
+  type:
+    | 'GAME_START'
+    | 'STOP_GAME'
+    | 'ANSWER_SUBMIT'
+    | 'GAME_END'
+    | 'SYNC_DATA'
+    | 'FINISH_GAME'
+    | 'NEXT_ROUND'
+    // Validation manuelle par accord mutuel d'un mot absent du dictionnaire
+    | 'VALIDATION_REQUEST'
+    | 'VALIDATION_RESPONSE';
   data: any;
 };
 
@@ -81,6 +91,10 @@ class BluetoothService {
   private onMessageReceived: ((message: GameMessage) => void) | null = null;
   private onPeerConnected: ((name: string) => void) | null = null;
   private onPeerDisconnected: (() => void) | null = null;
+  // Erreurs survenant APRÈS le démarrage (perte du Bluetooth en cours de
+  // route, échec tardif de l'annonce/scan) — startHosting/scanForDevices ne
+  // couvrent que l'échec immédiat.
+  private onError: ((message: string) => void) | null = null;
 
   // Réassemblage des chunks : msgId -> chunks reçus
   private rxBuffers = new Map<number, { total: number; parts: Map<number, string> }>();
@@ -94,7 +108,7 @@ class BluetoothService {
     return BT !== null;
   }
 
-  // ---------- Permissions ----------
+  // ---------- Permissions & état du Bluetooth ----------
 
   async requestPermissions(role: 'host' | 'guest'): Promise<boolean> {
     if (!BT) return false;
@@ -104,6 +118,31 @@ class BluetoothService {
     } catch (error) {
       console.warn('BLE permissions refusées:', error);
       return false;
+    }
+  }
+
+  /** Le Bluetooth est-il activé au niveau de l'appareil (pas juste l'app) ? */
+  async isBluetoothOn(): Promise<boolean> {
+    if (!BT) return false;
+    try {
+      return await BT.isBluetoothEnabled();
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Cet appareil supporte-t-il le mode périphérique BLE (nécessaire pour
+   * « Créer une partie ») ? Beaucoup de téléphones Android d'entrée de gamme
+   * ne le supportent pas — dans ce cas il faut rejoindre plutôt qu'héberger.
+   */
+  async supportsHosting(): Promise<boolean> {
+    if (!BT) return false;
+    try {
+      const caps = await BT.getCapabilities();
+      return caps?.supportsBlePeripheral !== false;
+    } catch {
+      return true; // indéterminé : on laisse tenter, l'échec sera signalé au démarrage
     }
   }
 
@@ -143,9 +182,20 @@ class BluetoothService {
   /**
    * Devient visible : publie le service GATT et annonce SERVICE_UUID.
    * `onPeerConnected` est déclenché quand un invité s'abonne à OUTBOX.
+   *
+   * Le module natif échoue SILENCIEUSEMENT dans plusieurs cas (Bluetooth
+   * désactivé, permission manquante au niveau OS, matériel sans support du
+   * mode périphérique) : aucune exception ne remonte à moins d'attendre
+   * explicitement l'événement 'advertisingStarted'/'advertisingStartFailed'.
+   * Sans ça, l'écran affichait "Partie visible" en permanence sans que rien
+   * ne soit réellement diffusé.
    */
   async startHosting(localName: string): Promise<void> {
     if (!BT) throw new Error('Bluetooth non disponible');
+
+    const enabled = await this.isBluetoothOn();
+    if (!enabled) throw new Error('BLUETOOTH_OFF');
+
     this.cleanupListeners();
     this.role = 'host';
     this.connected = false;
@@ -182,10 +232,48 @@ class BluetoothService {
         this.onPeerDisconnected?.();
       })
     );
+    // Écoute permanente (pas seulement au démarrage) : si l'annonce s'arrête
+    // en cours de route (Bluetooth coupé pendant l'attente), on le signale.
+    this.listeners.push(
+      BT.addEventListener('advertisingStartFailed', (data: any) => {
+        this.onError?.(data?.message || "Impossible de diffuser l'annonce Bluetooth");
+      })
+    );
 
-    BT.startAdvertising({
-      serviceUUIDs: [SERVICE_UUID],
-      localName: localName.slice(0, 20) || 'Petit Bac',
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const unsubStarted = BT.addEventListener('advertisingStarted', () => {
+        if (settled) return;
+        settled = true;
+        unsubStarted();
+        unsubFailed();
+        clearTimeout(timer);
+        resolve();
+      });
+      const unsubFailed = BT.addEventListener('advertisingStartFailed', (data: any) => {
+        if (settled) return;
+        settled = true;
+        unsubStarted();
+        unsubFailed();
+        clearTimeout(timer);
+        reject(new Error(data?.message || "Impossible de diffuser l'annonce Bluetooth"));
+      });
+      // Filet : certaines versions du module ne confirment pas le succès de
+      // façon fiable sur tous les Android. Passé ce délai sans échec
+      // explicite, on considère que ça a démarré plutôt que de bloquer
+      // l'utilisateur indéfiniment.
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        unsubStarted();
+        unsubFailed();
+        resolve();
+      }, 4000);
+
+      BT.startAdvertising({
+        serviceUUIDs: [SERVICE_UUID],
+        localName: localName.slice(0, 20) || 'Petit Bac',
+      });
     });
   }
 
@@ -206,6 +294,10 @@ class BluetoothService {
     duration: number = 10000
   ): Promise<void> {
     if (!BT) throw new Error('Bluetooth non disponible');
+
+    const enabled = await this.isBluetoothOn();
+    if (!enabled) throw new Error('BLUETOOTH_OFF');
+
     this.cleanupListeners();
     this.role = 'guest';
 
@@ -218,6 +310,11 @@ class BluetoothService {
           id: device.id,
           name: device.localName || device.name || null,
         });
+      })
+    );
+    this.listeners.push(
+      BT.addEventListener('scanFailed', (data: any) => {
+        this.onError?.(data?.message || 'Le scan Bluetooth a échoué');
       })
     );
 
@@ -318,10 +415,12 @@ class BluetoothService {
 
   setConnectionListeners(
     onConnected: ((name: string) => void) | null,
-    onDisconnected: (() => void) | null
+    onDisconnected: (() => void) | null,
+    onError?: ((message: string) => void) | null
   ): void {
     this.onPeerConnected = onConnected;
     this.onPeerDisconnected = onDisconnected;
+    this.onError = onError || null;
   }
 
   // ---------- État / nettoyage ----------
@@ -364,6 +463,7 @@ class BluetoothService {
       this.onMessageReceived = null;
       this.onPeerConnected = null;
       this.onPeerDisconnected = null;
+      this.onError = null;
     }
   }
 }

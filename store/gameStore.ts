@@ -27,6 +27,15 @@ export type RoundHistory = {
   opponentValidWords: number;
 };
 
+// Mots validés par accord mutuel pendant la partie (mode Bluetooth, pas de
+// table serveur) + verdict du gate IA de fin de manche. aiResult: null tant
+// qu'aucune clé Gemini n'a permis de trancher (Partie 7).
+export type DictionaryHistoryEntry = {
+  word: string;
+  categorieName: string;
+  aiResult: boolean | null;
+};
+
 type GameState = {
   currentLetter: string | null;
   categories: Categorie[];
@@ -50,12 +59,17 @@ type GameState = {
 
   // Round system state
   currentRound: number;
-  totalScore: number; // Score cumulé sur toutes les manches
-  opponentTotalScore: number;
   roundHistory: RoundHistory[];
   stoppedEarly: boolean; // Si le joueur a validé avant la fin
   endGameRequested: boolean; // Si une demande de fin a été envoyée
   endGameRequestReceived: boolean; // Si une demande de fin a été reçue
+
+  // Mode Bluetooth uniquement (pas de table serveur) : historique des mots
+  // validés par accord mutuel sur TOUTE la partie (survit à la navigation
+  // manche par manche, contrairement à un state local d'écran).
+  dictionaryHistory: DictionaryHistoryEntry[];
+  addDictionaryHistoryEntries: (entries: { word: string; categorieName: string }[]) => void;
+  setDictionaryHistoryResult: (word: string, categorieName: string, aiResult: boolean) => void;
 
   setLetter: (letter: string) => void;
   setCategories: (categories: Categorie[]) => void;
@@ -79,7 +93,11 @@ type GameState = {
   setStoppedEarly: (stopped: boolean) => void;
   setEndGameRequested: (requested: boolean) => void;
   setEndGameRequestReceived: (received: boolean) => void;
-  updateTotalScores: (myScore: number, opponentScore: number) => void;
+
+  // Validation manuelle par accord mutuel (mot absent du dictionnaire) :
+  // corrige un résultat déjà soumis et recalcule le score correspondant.
+  patchOwnResult: (categorieId: number, updates: Partial<GameResult>) => void;
+  patchOpponentResult: (categorieId: number, updates: Partial<GameResult>) => void;
 };
 
 export const useGameStore = create<GameState>((set) => ({
@@ -102,12 +120,11 @@ export const useGameStore = create<GameState>((set) => ({
 
   // Round system state
   currentRound: 1,
-  totalScore: 0,
-  opponentTotalScore: 0,
   roundHistory: [],
   stoppedEarly: false,
   endGameRequested: false,
   endGameRequestReceived: false,
+  dictionaryHistory: [],
 
   setLetter: (letter) => set({ currentLetter: letter }),
 
@@ -158,14 +175,17 @@ export const useGameStore = create<GameState>((set) => ({
       opponentResults: null,
       opponentScore: 0,
       currentRound: 1,
-      totalScore: 0,
-      opponentTotalScore: 0,
       roundHistory: [],
       stoppedEarly: false,
       endGameRequested: false,
       endGameRequestReceived: false,
+      dictionaryHistory: [],
     }),
 
+  // N'appeler qu'au tout DÉBUT d'une partie multijoueur (pas entre deux
+  // manches : ça remettrait currentRound à 1 et viderait roundHistory —
+  // voir app/multiplayer-results.tsx, startNextRound() utilise startNewRound()
+  // seul pour passer à la manche suivante sans perdre l'historique).
   startMultiplayerGame: (letter, categories, isHost, opponentName) =>
     set({
       currentLetter: letter,
@@ -183,12 +203,11 @@ export const useGameStore = create<GameState>((set) => ({
       opponentResults: null,
       opponentScore: 0,
       currentRound: 1,
-      totalScore: 0,
-      opponentTotalScore: 0,
       roundHistory: [],
       stoppedEarly: false,
       endGameRequested: false,
       endGameRequestReceived: false,
+      dictionaryHistory: [],
     }),
 
   setMultiplayerResults: (myResults, myScore, stoppedEarly = false) =>
@@ -222,12 +241,11 @@ export const useGameStore = create<GameState>((set) => ({
       opponentResults: null,
       opponentScore: 0,
       currentRound: 1,
-      totalScore: 0,
-      opponentTotalScore: 0,
       roundHistory: [],
       stoppedEarly: false,
       endGameRequested: false,
       endGameRequestReceived: false,
+      dictionaryHistory: [],
     }),
 
   setTimeRemaining: (timeOrFn) =>
@@ -270,15 +288,42 @@ export const useGameStore = create<GameState>((set) => ({
       roundHistory: [...state.roundHistory, round],
     })),
 
+  addDictionaryHistoryEntries: (entries) =>
+    set((state) => ({
+      dictionaryHistory: [...state.dictionaryHistory, ...entries.map((e) => ({ ...e, aiResult: null }))],
+    })),
+
+  setDictionaryHistoryResult: (word, categorieName, aiResult) =>
+    set((state) => ({
+      dictionaryHistory: state.dictionaryHistory.map((h) =>
+        h.word === word && h.categorieName === categorieName && h.aiResult === null ? { ...h, aiResult } : h
+      ),
+    })),
+
   setStoppedEarly: (stopped) => set({ stoppedEarly: stopped }),
 
   setEndGameRequested: (requested) => set({ endGameRequested: requested }),
 
   setEndGameRequestReceived: (received) => set({ endGameRequestReceived: received }),
 
-  updateTotalScores: (myScore, opponentScore) =>
-    set((state) => ({
-      totalScore: state.totalScore + myScore,
-      opponentTotalScore: state.opponentTotalScore + opponentScore,
-    })),
+  patchOwnResult: (categorieId, updates) =>
+    set((state) => {
+      if (!state.results) return {};
+      const results = state.results.map((r) =>
+        r.categorieId === categorieId ? { ...r, ...updates } : r
+      );
+      return { results, score: results.reduce((sum, r) => sum + r.points, 0) };
+    }),
+
+  patchOpponentResult: (categorieId, updates) =>
+    set((state) => {
+      if (!state.opponentResults) return {};
+      const opponentResults = state.opponentResults.map((r) =>
+        r.categorieId === categorieId ? { ...r, ...updates } : r
+      );
+      return {
+        opponentResults,
+        opponentScore: opponentResults.reduce((sum, r) => sum + r.points, 0),
+      };
+    }),
 }));

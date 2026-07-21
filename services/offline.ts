@@ -1,6 +1,6 @@
 // services/offline.ts
 import { Platform } from 'react-native';
-import { loadDictionaryFromFile, DictionaryData } from '../utils/storage';
+import { loadDictionaryFromFile, saveDictionaryToFile, DictionaryData } from '../utils/storage';
 import { normalizeWord } from '../utils/normalize';
 
 let cachedData: DictionaryData | null = null;
@@ -78,4 +78,49 @@ export async function loadOfflineDictionary(): Promise<boolean> {
 
   await populateOfflineDatabase(data);
   return true;
+}
+
+/**
+ * Ajoute un mot au dictionnaire local (validation manuelle par accord
+ * mutuel en Bluetooth/hors-ligne). S'il n'existait aucun dictionnaire
+ * téléchargé, on en crée un à partir du dictionnaire embarqué + ce mot :
+ * après cet appel, `isDictionaryDownloaded()` renvoie true.
+ *
+ * Limite connue : un futur "Mettre à jour le dictionnaire" (téléchargement
+ * Supabase) écrase ce fichier et perd les mots ajoutés localement — pas de
+ * fusion. Acceptable pour l'usage visé (mots ajoutés en partie Bluetooth,
+ * rarement suivi d'un re-téléchargement immédiat).
+ */
+export async function addWordToLocalDictionary(word: string, categorieId: number): Promise<boolean> {
+  if (!cachedData) {
+    await initOfflineDatabase();
+  }
+  if (!cachedData) {
+    return false;
+  }
+
+  const normalized = normalizeWord(word);
+  const alreadyThere = cachedData.mots.some(
+    (m) => m.mot_normalized === normalized && m.categorie_id === categorieId
+  );
+  if (alreadyThere) {
+    return true;
+  }
+
+  const nextId = cachedData.mots.reduce((max, m) => Math.max(max, m.id), 0) + 1;
+  cachedData = {
+    ...cachedData,
+    mots: [
+      ...cachedData.mots,
+      { id: nextId, mot: word.trim(), mot_normalized: normalized, categorie_id: categorieId },
+    ],
+  };
+
+  try {
+    await saveDictionaryToFile(cachedData);
+    return true;
+  } catch (error) {
+    console.warn("📦 Impossible d'enregistrer le mot dans le dictionnaire local:", error);
+    return false;
+  }
 }

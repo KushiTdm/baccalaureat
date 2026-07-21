@@ -11,6 +11,11 @@ type SettingsState = {
   disabledCategoryIds: number[];
   soundsEnabled: boolean;
   hapticsEnabled: boolean;
+  // Clé Gemini (aistudio.google.com, niveau gratuit) saisie par l'utilisateur
+  // dans les Réglages. Stockée UNIQUEMENT en local (AsyncStorage, jamais
+  // commitée/bundlée) : alimente l'enrichissement du dictionnaire (Réglages)
+  // et le gate IA de fin de manche, jamais un ajout libre par un joueur.
+  geminiApiKey: string;
   loaded: boolean;
 
   loadSettings: () => Promise<void>;
@@ -18,6 +23,7 @@ type SettingsState = {
   toggleCategory: (categoryId: number) => void;
   setSoundsEnabled: (enabled: boolean) => void;
   setHapticsEnabled: (enabled: boolean) => void;
+  setGeminiApiKey: (key: string) => void;
 };
 
 async function persist(state: SettingsState) {
@@ -29,6 +35,7 @@ async function persist(state: SettingsState) {
         disabledCategoryIds: state.disabledCategoryIds,
         soundsEnabled: state.soundsEnabled,
         hapticsEnabled: state.hapticsEnabled,
+        geminiApiKey: state.geminiApiKey,
       })
     );
   } catch {
@@ -41,6 +48,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   disabledCategoryIds: [],
   soundsEnabled: true,
   hapticsEnabled: true,
+  geminiApiKey: '',
   loaded: false,
 
   loadSettings: async () => {
@@ -53,6 +61,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           disabledCategoryIds: saved.disabledCategoryIds ?? [],
           soundsEnabled: saved.soundsEnabled ?? true,
           hapticsEnabled: saved.hapticsEnabled ?? true,
+          geminiApiKey: saved.geminiApiKey ?? '',
         });
       }
     } catch {
@@ -83,6 +92,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setHapticsEnabled: (enabled) => {
     set({ hapticsEnabled: enabled });
+    persist(get());
+  },
+
+  setGeminiApiKey: (key) => {
+    set({ geminiApiKey: key.trim() });
     persist(get());
   },
 }));

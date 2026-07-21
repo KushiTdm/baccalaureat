@@ -62,11 +62,29 @@ export default function MultiplayerSetupScreen() {
     router.replace('/multiplayer-game');
   };
 
+  // Message clair pour les échecs courants au lieu d'un "Erreur" générique
+  function bleErrorMessage(error: unknown, fallback: string): string {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === 'BLUETOOTH_OFF') {
+      return "Le Bluetooth est désactivé sur cet appareil. Activez-le dans les réglages puis réessayez.";
+    }
+    return message || fallback;
+  }
+
   // ----- RÔLE HÔTE : devenir visible et attendre -----
   async function handleHost() {
     const granted = await bluetoothService.requestPermissions('host');
     if (!granted) {
       Alert.alert('Permissions', 'Les permissions Bluetooth sont nécessaires pour créer une partie.');
+      return;
+    }
+
+    const canHost = await bluetoothService.supportsHosting();
+    if (!canHost) {
+      Alert.alert(
+        'Non supporté',
+        "Cet appareil ne semble pas prendre en charge le mode « point d'accès » Bluetooth requis pour créer une partie. Essayez « Rejoindre une partie » depuis cet appareil à la place (l'autre joueur crée la partie)."
+      );
       return;
     }
 
@@ -79,11 +97,14 @@ export default function MultiplayerSetupScreen() {
           goToGame();
         }
       });
+      bluetoothService.setConnectionListeners(null, null, (message) => {
+        Alert.alert('Bluetooth', message);
+      });
       await bluetoothService.startHosting(user?.username || 'Petit Bac');
       setMode('hosting');
     } catch (error) {
       console.error('BLE hosting error:', error);
-      Alert.alert('Erreur', 'Impossible de créer la partie Bluetooth.');
+      Alert.alert('Erreur', bleErrorMessage(error, 'Impossible de créer la partie Bluetooth.'));
     }
   }
 
@@ -98,6 +119,9 @@ export default function MultiplayerSetupScreen() {
     setMode('scanning');
     setScanning(true);
     setDevices([]);
+    bluetoothService.setConnectionListeners(null, null, (message) => {
+      Alert.alert('Bluetooth', message);
+    });
 
     try {
       await bluetoothService.scanForDevices((device) => {
@@ -106,7 +130,9 @@ export default function MultiplayerSetupScreen() {
         );
       }, 12000);
     } catch (error) {
-      Alert.alert('Erreur', 'Impossible de scanner les appareils Bluetooth');
+      console.error('BLE scan error:', error);
+      Alert.alert('Erreur', bleErrorMessage(error, 'Impossible de scanner les appareils Bluetooth'));
+      setMode('choice');
     } finally {
       setScanning(false);
     }
@@ -141,7 +167,7 @@ export default function MultiplayerSetupScreen() {
       goToGame();
     } catch (error) {
       console.error('BLE connect error:', error);
-      Alert.alert('Erreur', 'Impossible de se connecter à cet appareil');
+      Alert.alert('Erreur', bleErrorMessage(error, 'Impossible de se connecter à cet appareil'));
       await bluetoothService.disconnect();
     } finally {
       setConnecting(false);
@@ -229,7 +255,10 @@ export default function MultiplayerSetupScreen() {
               <Text style={styles.emptyText}>Aucune partie trouvée</Text>
               <Text style={styles.emptySubtext}>
                 Vérifiez que l'autre joueur a bien appuyé sur « Créer une partie »
-                et que le Bluetooth est activé.
+                et que le Bluetooth est activé.{'\n\n'}
+                Sur certains téléphones Android, la LOCALISATION doit aussi être
+                activée (Réglages → Position) pour que la recherche Bluetooth
+                fonctionne — même si l'app n'en a pas besoin par ailleurs.
               </Text>
             </View>
           )}

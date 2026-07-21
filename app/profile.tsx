@@ -11,16 +11,14 @@ import Animated, {
   FadeInUp,
   SlideInRight,
 } from 'react-native-reanimated';
-import { 
-  User, 
-  Edit3, 
-  Trophy, 
-  Target, 
-  TrendingUp, 
-  Award,
+import {
+  User,
+  Edit3,
+  Trophy,
   Mail,
   ArrowLeft,
-  LogOut
+  LogOut,
+  ChevronRight,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, gradients, fonts, radius, spacing, shadow } from '../constants/theme';
@@ -101,28 +99,21 @@ export default function ProfileScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header */}
-        <Animated.View 
+        {/* Header : simple chevron, sans titre ni action (maquette "Profil") */}
+        <Animated.View
           entering={FadeInDown.delay(100).springify()}
           style={styles.header}
         >
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => router.back()}
           >
             <ArrowLeft size={24} color={colors.primary} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Profil</Text>
-          <TouchableOpacity
-            style={styles.logoutButton}
-            onPress={handleLogout}
-          >
-            <LogOut size={22} color={colors.danger} />
-          </TouchableOpacity>
         </Animated.View>
 
         {/* Avatar et username */}
-        <Animated.View 
+        <Animated.View
           entering={FadeInDown.delay(200).springify()}
           style={styles.profileCard}
         >
@@ -183,38 +174,30 @@ export default function ProfileScreen() {
             </View>
           )}
 
-          <View style={styles.eloContainer}>
-            <Text style={styles.eloLabel}>ELO Rating</Text>
-            <Text style={styles.eloValue}>{user.elo_rating}</Text>
-          </View>
+          {/* Ligne meta condensée (maquette : "@handle · Niveau · Rang") avec nos vraies données */}
+          <Text style={styles.metaLine}>
+            ELO {user.elo_rating}
+            {user.rank_position ? ` · Rang #${user.rank_position}` : ''}
+          </Text>
         </Animated.View>
 
-        {/* Statistiques principales */}
-        <Animated.View 
+        {/* Statistiques principales : une seule ligne de 3 cartes (maquette) */}
+        <Animated.View
           entering={FadeInUp.delay(300).springify()}
           style={styles.statsGrid}
         >
           <View style={styles.statCard}>
-            <Trophy size={28} color={colors.gold} />
-            <Text style={styles.statValue}>{user.total_games_won}</Text>
-            <Text style={styles.statLabel}>Victoires</Text>
-          </View>
-
-          <View style={styles.statCard}>
-            <Target size={28} color={colors.success} />
             <Text style={styles.statValue}>{user.total_games_played}</Text>
             <Text style={styles.statLabel}>Parties</Text>
           </View>
 
           <View style={styles.statCard}>
-            <TrendingUp size={28} color={colors.blue} />
-            <Text style={styles.statValue}>{winRate.toFixed(0)}%</Text>
+            <Text style={[styles.statValue, styles.statValueSuccess]}>{winRate.toFixed(0)}%</Text>
             <Text style={styles.statLabel}>Victoires</Text>
           </View>
 
           <View style={styles.statCard}>
-            <Award size={28} color={colors.pink} />
-            <Text style={styles.statValue}>{user.total_points}</Text>
+            <Text style={[styles.statValue, styles.statValueGold]}>{user.total_points}</Text>
             <Text style={styles.statLabel}>Points</Text>
           </View>
         </Animated.View>
@@ -225,6 +208,11 @@ export default function ProfileScreen() {
           style={styles.detailedStatsCard}
         >
           <Text style={styles.sectionTitle}>Statistiques détaillées</Text>
+
+          <View style={styles.statRow}>
+            <Text style={styles.statRowLabel}>Victoires</Text>
+            <Text style={styles.statRowValue}>{user.total_games_won}</Text>
+          </View>
 
           <View style={styles.statRow}>
             <Text style={styles.statRowLabel}>Meilleur score (manche)</Text>
@@ -278,36 +266,50 @@ export default function ProfileScreen() {
           </Animated.View>
         )}
 
-        {/* Section compte */}
+        {/* Section compte : liste icône + libellé + chevron (maquette "Profil") */}
         <Animated.View
           entering={FadeInUp.delay(500)}
           style={styles.accountCard}
         >
           <Text style={styles.sectionTitle}>Compte</Text>
 
-          <View style={styles.accountInfo}>
-            <Mail size={20} color={colors.textSecondary} />
-            <View style={styles.accountInfoText}>
-              <Text style={styles.accountLabel}>Email</Text>
-              <Text style={styles.accountValue}>
-                {user.email || 'Non lié'}
-              </Text>
+          <View style={styles.listRow}>
+            <View style={[styles.iconTile, { backgroundColor: colors.primarySoft }]}>
+              <Mail size={18} color={colors.primary} />
             </View>
+            <Text style={styles.listRowLabel}>Email</Text>
+            <Text style={styles.listRowValue} numberOfLines={1}>
+              {user.email || 'Non lié'}
+            </Text>
           </View>
 
           {!user.email && (
-            <Button
-              title="Lier un email"
+            <TouchableOpacity
+              style={styles.listRow}
               onPress={() => Alert.alert('Bientôt disponible', 'Cette fonctionnalité sera disponible prochainement')}
-              variant="secondary"
-            />
+            >
+              <View style={[styles.iconTile, { backgroundColor: colors.goldSoft }]}>
+                <Mail size={18} color={colors.goldDeep} />
+              </View>
+              <Text style={styles.listRowLabel}>Lier un email</Text>
+              <ChevronRight size={18} color={colors.textMuted} />
+            </TouchableOpacity>
           )}
 
-          <View style={styles.accountInfo}>
-            <Text style={styles.accountNote}>
-              💡 Votre progression est automatiquement sauvegardée sur cet appareil
-            </Text>
-          </View>
+          <TouchableOpacity
+            style={[styles.listRow, styles.listRowLast]}
+            onPress={handleLogout}
+          >
+            <View style={[styles.iconTile, { backgroundColor: colors.dangerSoft }]}>
+              <LogOut size={18} color={colors.danger} />
+            </View>
+            <Text style={[styles.listRowLabel, styles.listRowLabelDanger]}>Déconnexion</Text>
+            <ChevronRight size={18} color={colors.textMuted} />
+          </TouchableOpacity>
+
+          <Text style={styles.accountNote}>
+            💡 Votre progression est automatiquement sauvegardée sur cet appareil
+          </Text>
         </Animated.View>
 
         {/* Membre depuis */}
@@ -345,33 +347,15 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingBottom: 40,
   },
+  // Pas de titre ni d'action dans l'en-tête (maquette "Profil") : juste un retour
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 24,
+    marginBottom: 8,
   },
   backButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.surface,
+    width: 36,
+    height: 36,
     justifyContent: 'center',
-    alignItems: 'center',
-    ...shadow.card,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  logoutButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.dangerSoft,
-    justifyContent: 'center',
-    alignItems: 'center',
+    marginLeft: -6,
   },
   errorText: {
     color: colors.danger,
@@ -454,43 +438,37 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
-  eloContainer: {
-    alignItems: 'center',
-  },
-  eloLabel: {
-    fontSize: 12,
+  // Ligne meta condensée sous le pseudo (maquette : "@handle · Niveau · Rang")
+  metaLine: {
+    fontSize: 14,
     color: colors.textSecondary,
-    marginBottom: 4,
     fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
-  eloValue: {
-    fontSize: 32,
-    fontFamily: fonts.displayBold,
-    color: colors.primary,
-  },
+  // Une seule ligne de 3 cartes (maquette), au lieu d'une grille 2x2
   statsGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 12,
     marginBottom: 20,
   },
   statCard: {
     flex: 1,
-    minWidth: '47%',
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
-    padding: 20,
+    paddingVertical: 20,
     alignItems: 'center',
     ...shadow.card,
   },
   statValue: {
-    fontSize: 26,
+    fontSize: 24,
     fontFamily: fonts.displayBold,
     color: colors.text,
-    marginTop: 8,
     marginBottom: 4,
+  },
+  statValueSuccess: {
+    color: colors.success,
+  },
+  statValueGold: {
+    color: colors.gold,
   },
   statLabel: {
     fontSize: 13,
@@ -546,36 +524,52 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginLeft: 12,
   },
+  // Carte blanche + liste icône/libellé/chevron (maquette "Profil")
   accountCard: {
-    backgroundColor: colors.primarySoft,
+    backgroundColor: colors.surface,
     borderRadius: radius.lg,
     padding: 20,
     marginBottom: 20,
+    ...shadow.card,
   },
-  accountInfo: {
+  listRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: colors.borderLight,
   },
-  accountInfoText: {
+  listRowLast: {
+    borderBottomWidth: 0,
+  },
+  iconTile: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  listRowLabel: {
     flex: 1,
-  },
-  accountLabel: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginBottom: 2,
-  },
-  accountValue: {
     fontSize: 15,
     fontWeight: '600',
     color: colors.text,
+  },
+  listRowLabelDanger: {
+    color: colors.danger,
+  },
+  listRowValue: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    maxWidth: '45%',
   },
   accountNote: {
     fontSize: 12,
     color: colors.textSecondary,
     lineHeight: 18,
     fontStyle: 'italic',
+    marginTop: 12,
   },
   memberSinceCard: {
     borderRadius: radius.md,

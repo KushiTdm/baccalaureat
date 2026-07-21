@@ -145,15 +145,17 @@ export default function GameScreen() {
       <View style={styles.container}>
         <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
           <View style={styles.headerRow}>
-            <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.letterContainer}>
-              <Text style={styles.letterLabel}>Lettre</Text>
+            <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.letterRow}>
               <View style={styles.letterCircle}>
                 <Text style={styles.letter}>{currentLetter!.toUpperCase()}</Text>
               </View>
+              <Text style={styles.filledText}>
+                {filledCount} / {categories.length} remplis
+              </Text>
             </Animated.View>
 
-            <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.timerContainer}>
-              <Timer onTimeUp={handleTimeUp} />
+            <Animated.View entering={FadeInDown.delay(200).springify()}>
+              <Timer onTimeUp={handleTimeUp} compact />
             </Animated.View>
           </View>
 
@@ -166,9 +168,6 @@ export default function GameScreen() {
                 style={[styles.progressFill, { width: `${progressPercent}%` }]}
               />
             </View>
-            <Text style={styles.progressText}>
-              {filledCount}/{categories.length} catégories remplies
-            </Text>
           </Animated.View>
         </Animated.View>
 
@@ -236,35 +235,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.lg,
   },
-  letterContainer: {
+  // Cercle-lettre + "X / Y remplis" alignés sur une ligne (maquette "Variante A")
+  letterRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-  },
-  letterLabel: {
-    fontSize: 13,
-    color: colors.textMuted,
-    fontWeight: '600',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
+    gap: spacing.md,
+    flexShrink: 1,
   },
   letterCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
     ...shadow.card,
   },
   letter: {
-    fontSize: 32,
+    fontSize: 22,
     fontFamily: fonts.displayBold,
     color: colors.primary,
   },
-  timerContainer: {
-    flex: 1,
-    maxWidth: 180,
-    marginLeft: spacing.lg,
+  filledText: {
+    fontSize: 15,
+    color: colors.textSecondary,
+    fontWeight: '600',
   },
   progressContainer: {
     gap: spacing.sm,
@@ -278,12 +273,6 @@ const styles = StyleSheet.create({
   progressFill: {
     height: '100%',
     borderRadius: 4,
-  },
-  progressText: {
-    fontSize: 13,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    fontWeight: '600',
   },
   scrollView: {
     flex: 1,

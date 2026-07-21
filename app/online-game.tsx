@@ -1,4 +1,4 @@
-// app/online-game.tsx - GAMEPLAY TEMPS RÉEL (socket.io) avec STOP simultané
+// app/online-game.tsx - GAMEPLAY TEMPS RÉEL (Supabase Realtime) avec STOP simultané
 import { View, Text, StyleSheet, ScrollView, Dimensions, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -51,6 +51,9 @@ export default function OnlineGameScreen() {
   const [stoppedReason, setStoppedReason] = useState<string | null>(null);
   const [opponentLeft, setOpponentLeft] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  // Score cumulé autoritaire (game_room_players.score), tenu à jour en
+  // direct via onScoreUpdated — jamais une reconstruction locale.
+  const [liveScores, setLiveScores] = useState<{ my: number; opponent: number } | null>(null);
 
   // Garde-fous (refs pour éviter les stale closures dans les callbacks socket)
   const finishedRef = useRef(false);   // j'ai déjà déclenché/reçu le STOP
@@ -270,10 +273,20 @@ export default function OnlineGameScreen() {
         setOpponentLeft(true);
       },
 
-      // Ma propre connexion : socket.io rejoint automatiquement la room au
-      // retour (join-room + catch-up serveur resynchronisent la manche).
+      // Ma propre connexion : le canal Realtime se réabonne automatiquement
+      // au retour réseau (rattrapage interne au service qui resynchronise la manche).
       onDisconnected: () => setReconnecting(true),
       onConnected: () => setReconnecting(false),
+
+      // Score cumulé serveur (game_room_players.score), recalculé à chaque
+      // finalisation/validation manuelle — source de vérité pour le badge
+      // affiché en direct, jamais une reconstruction locale.
+      onScoreUpdated: ({ playerId: updatedId, score }) => {
+        setLiveScores((prev) => {
+          const next = prev || { my: 0, opponent: 0 };
+          return updatedId === playerId ? { ...next, my: score } : { ...next, opponent: score };
+        });
+      },
     });
 
     return () => {
@@ -316,6 +329,15 @@ export default function OnlineGameScreen() {
             <Text style={styles.opponentName}>{opponentName}</Text>
           </Animated.View>
         </View>
+
+        {liveScores && (
+          <Animated.View entering={FadeInDown.delay(250).springify()} style={styles.liveScoreBadge}>
+            <Trophy size={14} color={colors.goldDeep} />
+            <Text style={styles.liveScoreText}>
+              Score total · Vous {liveScores.my} · {opponentName} {liveScores.opponent}
+            </Text>
+          </Animated.View>
+        )}
 
         <View style={styles.letterTimerRow}>
           <Animated.View entering={BounceIn.delay(300)} style={[styles.letterContainer, pulseStyle]}>
@@ -482,6 +504,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: colors.primary,
+  },
+  liveScoreBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginBottom: 12,
+  },
+  liveScoreText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
   },
   letterTimerRow: {
     flexDirection: 'row',

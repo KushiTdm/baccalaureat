@@ -209,56 +209,62 @@ export default function OnlineSetupScreen() {
         return;
       }
 
-      if (waitingRoom.isHost) {
-        await onlineService.startGame(waitingRoom.roomId);
-      }
-
       const categories = await getCategories();
 
-      // --- Bascule sur le serveur temps réel socket.io pour le gameplay ---
-      // (Supabase n'a servi que pour le matchmaking ; le STOP simultané et le
-      // scoring passent par socket.io, room = room_code partagé.)
+      // --- Bascule sur le canal Realtime pour le gameplay ---
+      // (Tout reste Supabase : le lobby utilisait déjà des requêtes directes,
+      // le STOP simultané et le scoring passent par services/websocket.ts,
+      // room = room_code partagé.)
       const me = currentPlayers.find(p => p.id === waitingRoom.playerId);
       const myName = me?.player_name || user?.username || playerName || 'Joueur';
 
-      try {
-        await websocketService.connect();
-        websocketService.setPlayerInfo(waitingRoom.playerId, myName);
+      await websocketService.connect();
+      websocketService.setPlayerInfo(waitingRoom.playerId, myName);
 
-        // Enregistré AVANT joinRoom : game-started peut arriver pendant la
-        // navigation (écran de jeu pas encore monté). Ce handler n'agit que
-        // sur le store → l'horloge est synchronisée quoi qu'il arrive.
-        websocketService.clearCallbacks();
-        websocketService.setCallbacks({
-          onGameStarted: (data) => {
-            const s = useGameStore.getState();
-            if (data.letter) s.setLetter(data.letter);
-            if (data.roundNumber) useGameStore.setState({ currentRound: data.roundNumber });
-            const elapsedSec = data.startedAt
-              ? Math.max(0, (data.timestamp - data.startedAt) / 1000)
-              : 0;
-            s.syncRoundClock(data.roundDuration || 120, elapsedSec);
-          },
-        });
+      // Enregistré AVANT joinRoom : game-started peut arriver pendant la
+      // navigation (écran de jeu pas encore monté). Ce handler n'agit que
+      // sur le store → l'horloge est synchronisée quoi qu'il arrive.
+      websocketService.clearCallbacks();
+      websocketService.setCallbacks({
+        onGameStarted: (data) => {
+          const s = useGameStore.getState();
+          if (data.letter) s.setLetter(data.letter);
+          if (data.roundNumber) useGameStore.setState({ currentRound: data.roundNumber });
+          const elapsedSec = data.startedAt
+            ? Math.max(0, (data.timestamp - data.startedAt) / 1000)
+            : 0;
+          s.syncRoundClock(data.roundDuration || 120, elapsedSec);
+        },
+      });
 
-        websocketService.joinRoom(waitingRoom.roomCode, waitingRoom.playerId, myName);
+      // CORRECTIF (bug "se retrouve seul") : joinRoom était auparavant
+      // fire-and-forget — un échec silencieux du canal Realtime (ou de la
+      // création de la manche par l'hôte, appelée sans attendre juste après)
+      // n'empêchait pas la navigation vers /online-game. L'un des deux
+      // joueurs pouvait donc se retrouver à jouer seul, la partie n'étant
+      // jamais réellement synchronisée côté serveur. On attend maintenant
+      // chaque étape et on n'avance QUE si elle a réellement réussi.
+      const joined = await websocketService.joinRoom(waitingRoom.roomCode, waitingRoom.playerId, myName);
+      if (!joined) {
+        throw new Error('Connexion au canal temps réel impossible');
+      }
 
-        // L'hôte déclenche la 1re manche ; si l'invité n'est pas encore
-        // connecté, le serveur diffère le démarrage (pendingStart)
-        if (waitingRoom.isHost) {
-          websocketService.startGame(
-            waitingRoom.letter,
-            useSettingsStore.getState().roundDurationSec
-          );
-        }
-      } catch (wsError) {
-        console.error('Erreur connexion temps réel:', wsError);
-        startingRef.current = false;
-        Alert.alert(
-          'Erreur',
-          'Connexion au serveur temps réel impossible. Vérifiez que le serveur WebSocket est démarré (et EXPO_PUBLIC_WS_URL si vous êtes sur un appareil physique).'
+      if (waitingRoom.isHost) {
+        const started = await websocketService.startGame(
+          waitingRoom.letter,
+          useSettingsStore.getState().roundDurationSec
         );
-        return;
+        if (!started) {
+          throw new Error('Impossible de créer la manche');
+        }
+        // La room ne bascule en 'playing' (et disparaît du lobby public)
+        // qu'une fois la manche réellement créée — sinon une salle "playing"
+        // sans aucune manche resterait bloquée, impossible à retenter.
+        try {
+          await onlineService.startGame(waitingRoom.roomId);
+        } catch (statusError) {
+          console.warn('Mise à jour du statut de la salle échouée (non bloquant):', statusError);
+        }
       }
 
       startMultiplayerGame(
@@ -272,7 +278,13 @@ export default function OnlineSetupScreen() {
     } catch (error) {
       console.error('Error starting game:', error);
       startingRef.current = false;
-      Alert.alert('Erreur', 'Impossible de démarrer la partie: ' + (error as Error).message);
+      Alert.alert(
+        'Erreur',
+        'Impossible de démarrer la partie (' + (error as Error).message + '). Nouvelle tentative...'
+      );
+      // Ne laisse pas le joueur bloqué dans une salle d'attente sans issue :
+      // on relance la surveillance, qui retentera dès le prochain tick.
+      setTimeout(() => loadPlayersAndWatch(), 2000);
     }
   }
 
