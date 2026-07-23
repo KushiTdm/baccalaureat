@@ -9,6 +9,7 @@ import { bluetoothService, GameMessage } from '../services/bluetooth';
 import { GameResult, RoundHistory } from '../store/gameStore';
 import { getCategories } from '../services/api';
 import { addWordToLocalDictionary } from '../services/offline';
+import { logAppError } from '../services/errorLog';
 import { CheckCircle, XCircle, Trophy, Crown, Play, StopCircle, Star, Award, Zap, HelpCircle } from 'lucide-react-native';
 
 import { pickRandomLetter } from '../utils/letters';
@@ -283,6 +284,10 @@ export default function MultiplayerResultsScreen() {
       }
     } catch (e) {
       console.warn('Gate IA dictionnaire (BLE) échoué (non bloquant):', e);
+      logAppError('gemini-gate-ble', (e as Error).message || String(e), {
+        letter: currentLetter,
+        words: candidates.map((r) => r.word),
+      });
       // Les entrées restent en attente (aiResult: null) plutôt que de faire
       // planter l'écran de résultats pour un échec réseau non critique.
     }

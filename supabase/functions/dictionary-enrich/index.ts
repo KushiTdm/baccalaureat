@@ -10,6 +10,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { generateWordsForLetter, isSafeCandidateWord, normalizeWordForCheck } from "../_shared/gemini.ts";
+import { log } from "../_shared/logger.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -78,9 +79,12 @@ Deno.serve(async (req: Request) => {
         .ilike("mot_normalized", `${letter.toLowerCase()}%`);
       const excludeSet = new Set((existing || []).map((m) => m.mot_normalized));
 
+      // generateWordsForLetter espace lui-même les appels Gemini (throttling
+      // niveau gratuit via _shared/logger.ts#waitForGeminiSlot) : pas besoin
+      // d'ajouter un délai ici, même avec plusieurs catégories dans la boucle.
       let proposed: string[] = [];
       try {
-        proposed = await generateWordsForLetter(geminiApiKey, {
+        proposed = await generateWordsForLetter(supabase, geminiApiKey, {
           letter,
           categorieName: cat.nom,
           exclude: Array.from(excludeSet),
@@ -140,6 +144,12 @@ Deno.serve(async (req: Request) => {
     return json({ letter, results, totalAccepted });
   } catch (error) {
     console.error("dictionary-enrich error:", error);
+    await log(supabase, {
+      source: "dictionary-enrich",
+      level: "error",
+      action: "dictionary-enrich",
+      message: (error as Error).message || String(error),
+    });
     return json({ error: (error as Error).message || "Erreur serveur" }, 500);
   }
 });

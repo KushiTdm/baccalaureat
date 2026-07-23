@@ -10,9 +10,10 @@ import { useUserStore } from '../store/userStore';
 import { recordOnlineGame } from '../services/stats';
 import Button from '../components/Button';
 import AdBanner from '../components/AdBanner';
+import PendingValidationsPanel from '../components/PendingValidationsPanel';
 import { maybeShowInterstitial } from '../services/ads';
 import { feedback } from '../services/feedback';
-import { websocketService } from '../services/websocket';
+import { websocketService, PendingValidationRow } from '../services/websocket';
 import { supabase } from '../lib/supabase';
 import { normalizeWord } from '../utils/normalize';
 import { CheckCircle, XCircle, Trophy, Crown, Play, StopCircle, Star, Award, Zap, HelpCircle } from 'lucide-react-native';
@@ -20,6 +21,10 @@ import { colors, fonts, radius, spacing, shadow } from '../constants/theme';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SAFE_AREA_HEIGHT = SCREEN_HEIGHT * 0.25;
+
+// Doit rester aligné sur RESUBMIT_AFTER_MS côté edge function
+// (supabase/functions/game-actions/index.ts) et PendingValidationsPanel.
+const RESUBMIT_AFTER_MS = 20000;
 
 export default function OnlineResultsScreen() {
   const router = useRouter();
@@ -39,52 +44,39 @@ export default function OnlineResultsScreen() {
     resetGame,
     isHost,
     stoppedEarly,
+    bonusApplied,
+    penaltyApplied,
+    opponentBonusApplied,
+    opponentPenaltyApplied,
+    serverTotalScore,
+    serverOpponentTotalScore,
+    serverTotalsReady,
+    setServerTotals,
   } = useGameStore();
 
   const [showFinalResults, setShowFinalResults] = useState(false);
   const [waitingForNextRound, setWaitingForNextRound] = useState(false);
   const [opponentGone, setOpponentGone] = useState(false);
-  // Demandes de validation manuelle envoyées, en attente de réponse
-  const [pendingValidation, setPendingValidation] = useState<Set<number>>(new Set());
+  // Toutes les demandes de validation manuelle encore sans réponse dans la
+  // room (toutes manches confondues) — voir components/PendingValidationsPanel.
+  const [pendingValidations, setPendingValidations] = useState<PendingValidationRow[]>([]);
   // Scores cumulés réels (game_room_players.score) reçus à la fin de partie —
-  // source de vérité pour l'écran final, la somme locale de roundHistory ne
-  // sert plus que de repli si ce fetch serveur échoue.
+  // lecture la plus fraîche possible au moment précis de la fin ; en cours de
+  // partie, `serverTotalScore`/`serverOpponentTotalScore` (store, tenus à
+  // jour via onScoreUpdated) servent de source de vérité à la place d'une
+  // somme locale de roundHistory.
   const [finalTotals, setFinalTotals] = useState<{ playerId: string; playerName: string; score: number }[] | null>(null);
   // Historique des mots validés par accord mutuel cette partie + verdict IA
   // (ai_result: true/false/undefined = en attente d'une clé Gemini).
   const [dictionaryHistory, setDictionaryHistory] = useState<
     { word: string; categorieName: string; aiResult: boolean | null }[]
   >([]);
-
-  // Partie terminée (écran final uniquement) → interstitiel + stats/ELO
-  const statsRecordedRef = useRef(false);
-  useEffect(() => {
-    if (!showFinalResults || statsRecordedRef.current) return;
-    statsRecordedRef.current = true;
-
-    maybeShowInterstitial();
-
-    const s = useGameStore.getState();
-    const myTotal = s.roundHistory.reduce((sum, r) => sum + r.myScore, 0);
-    const oppTotal = s.roundHistory.reduce((sum, r) => sum + r.opponentScore, 0);
-
-    // Son/vibration de fin de partie (rien en cas d'égalité)
-    if (myTotal > oppTotal) {
-      feedback.victory();
-    } else if (myTotal < oppTotal) {
-      feedback.defeat();
-    }
-
-    recordOnlineGame({
-      userId: useUserStore.getState().user?.id,
-      myPlayerId: websocketService.getCurrentPlayerId(),
-      myScore: myTotal,
-      opponentScore: oppTotal,
-      roundsPlayed: s.roundHistory.length,
-      validWords: s.roundHistory.reduce((sum, r) => sum + r.myValidWords, 0),
-      bestRoundScore: s.roundHistory.reduce((max, r) => Math.max(max, r.myScore), 0),
-    });
-  }, [showFinalResults]);
+  // Même chose mais scopé à la manche en cours : affiché dès l'écran de
+  // résultats de manche (pas seulement à l'écran final), pour que le
+  // joueur voie que ses mots validés sont bien soumis à l'IA tout de suite.
+  const [roundDictionaryHistory, setRoundDictionaryHistory] = useState<
+    { word: string; categorieName: string; aiResult: boolean | null }[]
+  >([]);
 
   const committedRef = useRef(false);
   const navigatedRef = useRef(false);
@@ -99,18 +91,134 @@ export default function OnlineResultsScreen() {
   const myValid = myResults.filter((r) => r.isValid).length;
   const oppValid = oppResults.filter((r) => r.isValid).length;
 
-  // Verrou : enregistre la manche courante dans l'historique une seule fois
+  // Totaux cumulés : repli local uniquement si le serveur n'a jamais répondu
+  // (perte réseau) — dans tous les autres cas, le total serveur fait foi.
+  // La somme locale de `roundHistory` a un défaut structurel qu'elle seule ne
+  // peut pas corriger : un score committé au moment du passage à la manche
+  // suivante ne bouge plus jamais ensuite, même si une validation manuelle
+  // est résolue après coup sur CETTE manche.
+  const histMy = roundHistory.reduce((s, r) => s + r.myScore, 0);
+  const histOpp = roundHistory.reduce((s, r) => s + r.opponentScore, 0);
+  const localFallbackMy = showFinalResults ? histMy : histMy + myFinalScore;
+  const localFallbackOpponent = showFinalResults ? histOpp : histOpp + opponentFinalScore;
+  // À la fin de partie, `finalTotals` (reçu via onGameEnded, lecture fraîche
+  // de game_room_players au moment précis de la fin) est préféré ; sinon le
+  // total serveur tenu à jour en direct ; en dernier recours, le repli local.
+  const serverMe = finalTotals?.find((r) => r.playerId === playerId);
+  const serverOpp = finalTotals?.find((r) => r.playerId !== playerId);
+  const displayMyTotal = serverMe ? serverMe.score : serverTotalsReady ? serverTotalScore : localFallbackMy;
+  const displayOpponentTotal = serverOpp ? serverOpp.score : serverTotalsReady ? serverOpponentTotalScore : localFallbackOpponent;
+
+  // Verrou : enregistre la manche courante dans l'historique une seule fois.
+  // Lit TOUJOURS l'état le plus frais via getState() au moment de l'appel
+  // (jamais les variables du rendu, capturées dans la closure du premier
+  // montage) : sinon, une validation manuelle résolue après ce montage mais
+  // avant le passage à la manche suivante écrivait encore l'ancien score
+  // dans roundHistory, faisant dériver le "Score total" affiché à chaque
+  // manche comportant une validation.
   const commitRoundToHistory = () => {
     if (committedRef.current) return;
     committedRef.current = true;
+    const s = useGameStore.getState();
+    const myResultsNow = s.results || [];
+    const oppResultsNow = s.opponentResults || [];
     addRoundToHistory({
-      roundNumber: currentRound,
-      letter: currentLetter || '',
-      myScore: myFinalScore,
-      opponentScore: opponentFinalScore,
-      myValidWords: myValid,
-      opponentValidWords: oppValid,
+      roundNumber: s.currentRound,
+      letter: s.currentLetter || '',
+      myScore: s.score || 0,
+      opponentScore: s.opponentScore || 0,
+      myValidWords: myResultsNow.filter((r) => r.isValid).length,
+      opponentValidWords: oppResultsNow.filter((r) => r.isValid).length,
     });
+  };
+
+  // Partie terminée (écran final uniquement) → interstitiel + stats/ELO
+  const statsRecordedRef = useRef(false);
+  useEffect(() => {
+    if (!showFinalResults || statsRecordedRef.current) return;
+    statsRecordedRef.current = true;
+
+    maybeShowInterstitial();
+
+    // Son/vibration de fin de partie (rien en cas d'égalité)
+    if (displayMyTotal > displayOpponentTotal) {
+      feedback.victory();
+    } else if (displayMyTotal < displayOpponentTotal) {
+      feedback.defeat();
+    }
+
+    const s = useGameStore.getState();
+    recordOnlineGame({
+      userId: useUserStore.getState().user?.id,
+      myPlayerId: websocketService.getCurrentPlayerId(),
+      myScore: displayMyTotal,
+      opponentScore: displayOpponentTotal,
+      roundsPlayed: s.roundHistory.length,
+      validWords: s.roundHistory.reduce((sum, r) => sum + r.myValidWords, 0),
+      bestRoundScore: s.roundHistory.reduce((max, r) => Math.max(max, r.myScore), 0),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showFinalResults]);
+
+  // Relit le score autoritaire de la manche depuis le serveur (recalcul
+  // complet : partage des mots dupliqués, pénalité remboursée, bonus de
+  // STOP...) au lieu de patcher les points localement — une correction
+  // locale ad-hoc ne peut pas reproduire fidèlement ces règles, ce qui
+  // provoquait un résumé de manche affichant un mauvais total après une
+  // validation manuelle.
+  const refreshRoundResults = async () => {
+    const fresh = await websocketService.refreshCurrentRoundResults();
+    if (!fresh) return;
+    const me = fresh.find((r) => r.playerId === playerId);
+    const opp = fresh.find((r) => r.playerId !== playerId);
+    const s = useGameStore.getState();
+    if (me) {
+      s.setMultiplayerResults(
+        me.results || [],
+        me.roundScore || 0,
+        me.stoppedEarly || false,
+        me.bonusApplied || false,
+        me.penaltyApplied || false
+      );
+    }
+    if (opp) {
+      s.setOpponentResults(opp.results || [], opp.roundScore || 0, opp.bonusApplied || false, opp.penaltyApplied || false);
+    }
+    s.setServerTotals(me?.totalScore ?? s.serverTotalScore, opp?.totalScore ?? s.serverOpponentTotalScore);
+  };
+
+  // Mots validés par accord mutuel PENDANT LA MANCHE EN COURS + verdict du
+  // gate IA (soumis automatiquement en tâche de fond par le serveur à chaque
+  // validation résolue, voir game-actions/runDictionaryAIGate).
+  const refreshRoundDictionaryHistory = async () => {
+    const roundId = websocketService.getCurrentRoundId();
+    if (!roundId) return;
+    const { data } = await supabase
+      .from('word_validation_votes')
+      .select('word, ai_checked_at, ai_result, categories(nom)')
+      .eq('round_id', roundId)
+      .eq('vote', true)
+      .order('created_at', { ascending: true });
+    setRoundDictionaryHistory(
+      (data || []).map((v: any) => ({
+        word: v.word,
+        categorieName: v.categories?.nom || '',
+        aiResult: v.ai_checked_at ? !!v.ai_result : null,
+      }))
+    );
+  };
+
+  // Instantané room-entière des demandes non résolues, pour le panneau
+  // persistant. Indépendant des Sets de dédoublonnage internes du service :
+  // une demande reste visible/actionnable tant qu'elle n'a pas de réponse,
+  // même si l'événement Realtime d'origine a été loupé (cause racine
+  // identifiée : plusieurs Alert.alert empilées, dont RN ne garantit pas
+  // l'affichage au-delà d'une ou deux).
+  const refreshPendingValidations = async () => {
+    const roomId = websocketService.getCurrentRoomDbId();
+    if (!roomId) return;
+    const rows = await websocketService.fetchPendingValidations(roomId);
+    setPendingValidations(rows);
   };
 
   useEffect(() => {
@@ -154,68 +262,58 @@ export default function OnlineResultsScreen() {
       onPlayerDisconnected: () => setOpponentGone(true),
       onPlayerLeft: () => setOpponentGone(true),
       onPlayerJoined: () => setOpponentGone(false),
+      // Score cumulé serveur, recalculé à chaque finalisation/validation
+      // manuelle — y compris celles résolues depuis le panneau persistant
+      // pour une manche PASSÉE (le round-id de la ligne modifiée n'a pas
+      // besoin de correspondre à la manche affichée ici : c'est justement
+      // ce qui permet au total de rester exact malgré l'orphelinage d'une
+      // demande après le passage à la manche suivante).
+      onScoreUpdated: ({ playerId: updatedId, score: updatedScore }) => {
+        const s = useGameStore.getState();
+        if (updatedId === playerId) {
+          s.setServerTotals(updatedScore, s.serverOpponentTotalScore);
+        } else {
+          s.setServerTotals(s.serverTotalScore, updatedScore);
+        }
+      },
       // Validation manuelle par accord mutuel d'un mot absent du
-      // dictionnaire. `data.playerId` désigne toujours le PROPRIÉTAIRE du
-      // mot à valider (jamais le votant) : avec 2 joueurs, si ce n'est pas
-      // moi c'est forcément l'adversaire qui demande une validation sur SON
-      // mot, et c'est donc à moi de voter.
+      // dictionnaire. Le panneau persistant (alimenté par polling, voir
+      // refreshPendingValidations) est désormais la source d'affichage/
+      // d'action pour les demandes reçues — plus de Alert.alert par demande,
+      // qui se perdaient silencieusement dès que plusieurs arrivaient
+      // rapprochées (RN ne garantit pas l'affichage de boîtes de dialogue
+      // empilées). Ce callback ne sert plus qu'à rafraîchir les données dès
+      // qu'un événement Realtime arrive, sans attendre le prochain polling.
       onWordValidationVote: (data) => {
-        const { voteId, playerId: ownerId, categorieId, word, vote } = data;
-
-        if (vote === null) {
-          if (ownerId === playerId) {
-            // Écho de ma propre demande : je désactive le bouton en attendant
-            setPendingValidation((prev) => new Set(prev).add(categorieId));
-          } else {
-            // L'adversaire demande la validation d'un de ses mots
-            const category = useGameStore.getState().categories.find((c) => c.id === categorieId);
-            Alert.alert(
-              'Validation demandée',
-              `${opponentName} pense que « ${word} » est valide pour la catégorie « ${category?.nom || ''} ». Êtes-vous d'accord ?`,
-              [
-                {
-                  text: 'Non',
-                  style: 'cancel',
-                  onPress: () => websocketService.respondWordValidation(voteId, false),
-                },
-                {
-                  text: 'Oui',
-                  onPress: async () => {
-                    const ok = await websocketService.respondWordValidation(voteId, true);
-                    if (ok) {
-                      useGameStore.getState().patchOpponentResult(categorieId, { isValid: true, points: 2 });
-                    }
-                  },
-                },
-              ]
-            );
-          }
-        } else if (ownerId === playerId) {
-          // Réponse à MA demande
-          setPendingValidation((prev) => {
-            const next = new Set(prev);
-            next.delete(categorieId);
-            return next;
-          });
-          if (vote) {
-            useGameStore.getState().patchOwnResult(categorieId, {
-              isValid: true,
-              points: 2,
-              manualValidationResult: true,
-              needsManualValidation: false,
-            });
-          } else {
-            useGameStore.getState().patchOwnResult(categorieId, {
-              manualValidationResult: false,
-              needsManualValidation: false,
-            });
+        const { playerId: ownerId, word, vote } = data;
+        refreshPendingValidations();
+        if (vote !== null) {
+          if (ownerId === playerId && !vote) {
             Alert.alert('Validation refusée', `${opponentName} n'a pas validé « ${word} ».`);
           }
+          refreshRoundResults();
+          refreshRoundDictionaryHistory();
         }
       },
     });
 
-    return () => {};
+    // Rattrapage immédiat au montage, puis polling léger tant que l'écran
+    // est affiché : filet contre une éventuelle coupure Realtime ou contre
+    // un évènement arrivé pendant la transition entre écrans (fenêtre où
+    // aucun callback n'était monté).
+    const roundId = websocketService.getCurrentRoundId();
+    if (roundId) {
+      websocketService.syncWordValidationsForRound(roundId);
+      refreshRoundDictionaryHistory();
+    }
+    refreshPendingValidations();
+    const pollInterval = setInterval(() => {
+      const rid = websocketService.getCurrentRoundId();
+      if (rid) websocketService.syncWordValidationsForRound(rid);
+      refreshPendingValidations();
+    }, 5000);
+
+    return () => clearInterval(pollInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -266,15 +364,20 @@ export default function OnlineResultsScreen() {
   };
 
   const requestWordValidation = (categorieId: number, categorieName: string, word: string) => {
-    setPendingValidation((prev) => new Set(prev).add(categorieId));
-    websocketService.requestWordValidation(categorieId, categorieName, word).then((ok) => {
-      if (!ok) {
-        setPendingValidation((prev) => {
-          const next = new Set(prev);
-          next.delete(categorieId);
-          return next;
-        });
-      }
+    websocketService.requestWordValidation(categorieId, categorieName, word).then(() => {
+      refreshPendingValidations();
+    });
+  };
+
+  const handleRespondValidation = (voteId: string, approved: boolean) => {
+    websocketService.respondWordValidation(voteId, approved).then(() => {
+      refreshPendingValidations();
+    });
+  };
+
+  const handleResubmitValidation = (row: PendingValidationRow) => {
+    websocketService.requestWordValidation(row.categorieId, row.categorieName, row.word, row.roundId).then(() => {
+      refreshPendingValidations();
     });
   };
 
@@ -282,26 +385,13 @@ export default function OnlineResultsScreen() {
     return null;
   }
 
-  // Totaux cumulés calculés depuis l'historique local (repli)
-  const histMy = roundHistory.reduce((s, r) => s + r.myScore, 0);
-  const histOpp = roundHistory.reduce((s, r) => s + r.opponentScore, 0);
-  // Sur l'écran final, la manche courante est déjà committée dans l'historique
-  const myTotalScore = showFinalResults ? histMy : histMy + myFinalScore;
-  const opponentTotal = showFinalResults ? histOpp : histOpp + opponentFinalScore;
-
-  // Sur l'écran final, préférer les totaux serveur (game_room_players.score,
-  // reçus via onGameEnded) — la somme locale ci-dessus ne sert que de repli
-  // si ce fetch a échoué (connexion perdue juste après la fin de partie).
-  const serverMe = finalTotals?.find((r) => r.playerId === playerId);
-  const serverOpp = finalTotals?.find((r) => r.playerId !== playerId);
-  const finalMyTotal = serverMe ? serverMe.score : myTotalScore;
-  const finalOpponentTotal = serverOpp ? serverOpp.score : opponentTotal;
   const pendingDictionaryCount = dictionaryHistory.filter((w) => w.aiResult === null).length;
+  const currentRoundId = websocketService.getCurrentRoundId();
 
   // ---------- ÉCRAN FINAL ----------
   if (showFinalResults) {
-    const isWinner = finalMyTotal > finalOpponentTotal;
-    const isDraw = finalMyTotal === finalOpponentTotal;
+    const isWinner = displayMyTotal > displayOpponentTotal;
+    const isDraw = displayMyTotal === displayOpponentTotal;
     const myWordsTotal = roundHistory.reduce((s, r) => s + r.myValidWords, 0);
     const oppWordsTotal = roundHistory.reduce((s, r) => s + r.opponentValidWords, 0);
 
@@ -328,6 +418,14 @@ export default function OnlineResultsScreen() {
             )}
           </Animated.View>
 
+          <PendingValidationsPanel
+            pending={pendingValidations}
+            myPlayerId={playerId || ''}
+            opponentName={opponentName || ''}
+            onRespond={handleRespondValidation}
+            onResubmit={handleResubmitValidation}
+          />
+
           <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.finalScoresCard}>
             <View style={styles.cardHeader}>
               <Award size={24} color={colors.primary} />
@@ -337,7 +435,7 @@ export default function OnlineResultsScreen() {
             <View style={styles.finalScoresRow}>
               <View style={[styles.finalScoreBlock, isWinner && styles.winnerBlock]}>
                 <Text style={styles.playerLabel}>Vous</Text>
-                <Text style={styles.finalScoreValue}>{finalMyTotal}</Text>
+                <Text style={styles.finalScoreValue}>{displayMyTotal}</Text>
                 <View style={styles.statsRow}>
                   <Star size={16} color={colors.gold} />
                   <Text style={styles.validCount}>{myWordsTotal} mots</Text>
@@ -346,7 +444,7 @@ export default function OnlineResultsScreen() {
 
               <View style={[styles.finalScoreBlock, !isWinner && !isDraw && styles.winnerBlock]}>
                 <Text style={styles.playerLabel}>{opponentName}</Text>
-                <Text style={styles.finalScoreValue}>{finalOpponentTotal}</Text>
+                <Text style={styles.finalScoreValue}>{displayOpponentTotal}</Text>
                 <View style={styles.statsRow}>
                   <Star size={16} color={colors.gold} />
                   <Text style={styles.validCount}>{oppWordsTotal} mots</Text>
@@ -460,6 +558,14 @@ export default function OnlineResultsScreen() {
           </View>
         </Animated.View>
 
+        <PendingValidationsPanel
+          pending={pendingValidations}
+          myPlayerId={playerId || ''}
+          opponentName={opponentName || ''}
+          onRespond={handleRespondValidation}
+          onResubmit={handleResubmitValidation}
+        />
+
         <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.scoreCard}>
           <View style={styles.scoreHeader}>
             <Zap size={24} color={colors.gold} />
@@ -474,9 +580,8 @@ export default function OnlineResultsScreen() {
                 <CheckCircle size={16} color={colors.success} />
                 <Text style={styles.validCount}>{myValid} valides</Text>
               </View>
-              {stoppedEarly && myResults.some((r) => r.word && !r.isValid) && (
-                <Text style={styles.penaltyText}>⚠️ -3pts (pénalité)</Text>
-              )}
+              {penaltyApplied && <Text style={styles.penaltyText}>⚠️ -3pts (pénalité)</Text>}
+              {bonusApplied && <Text style={styles.bonusText}>🎁 +3pts (bonus STOP)</Text>}
             </View>
 
             <View style={styles.scoreBlock}>
@@ -486,6 +591,8 @@ export default function OnlineResultsScreen() {
                 <CheckCircle size={16} color={colors.success} />
                 <Text style={styles.validCount}>{oppValid} valides</Text>
               </View>
+              {opponentPenaltyApplied && <Text style={styles.penaltyText}>⚠️ -3pts (pénalité)</Text>}
+              {opponentBonusApplied && <Text style={styles.bonusText}>🎁 +3pts (bonus STOP)</Text>}
             </View>
           </View>
         </Animated.View>
@@ -493,11 +600,36 @@ export default function OnlineResultsScreen() {
         <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.totalScoreCard}>
           <Text style={styles.totalScoreLabel}>Score total</Text>
           <View style={styles.totalScoreRow}>
-            <Text style={styles.totalScoreValue}>{myTotalScore}</Text>
+            <Text style={styles.totalScoreValue}>{displayMyTotal}</Text>
             <Text style={styles.totalScoreSeparator}>-</Text>
-            <Text style={styles.totalScoreValue}>{opponentTotal}</Text>
+            <Text style={styles.totalScoreValue}>{displayOpponentTotal}</Text>
           </View>
         </Animated.View>
+
+        {roundDictionaryHistory.length > 0 && (
+          <View style={styles.dictionaryHistoryContainer}>
+            <Text style={styles.sectionTitle}>Mots soumis au dictionnaire</Text>
+            {roundDictionaryHistory.some((w) => w.aiResult === null) && (
+              <View style={styles.noKeyBanner}>
+                <Text style={styles.noKeyBannerText}>
+                  Ces mots comptent pour votre score mais ne seront pas ajoutés au dictionnaire
+                  commun sans clé Gemini — ajoute une clé gratuite (aistudio.google.com) dans les
+                  réglages pour activer l'ajout automatique.
+                </Text>
+              </View>
+            )}
+            {roundDictionaryHistory.map((w, index) => (
+              <View key={index} style={styles.dictionaryHistoryRow}>
+                <Text style={styles.dictionaryHistoryIcon}>
+                  {w.aiResult === null ? '⏳' : w.aiResult ? '✅' : '❌'}
+                </Text>
+                <Text style={styles.dictionaryHistoryText}>
+                  {w.word} — {w.categorieName}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         <View style={styles.comparisonContainer}>
           <Text style={styles.sectionTitle}>Réponses</Text>
@@ -514,6 +646,14 @@ export default function OnlineResultsScreen() {
               myAnswer.isValid && oppAnswer.isValid &&
               normalizeWord(myAnswer.word) === normalizeWord(oppAnswer.word)
             );
+            // Ma demande de validation en cours pour CETTE catégorie de LA
+            // manche affichée (dérivé du panneau persistant, plus de state
+            // local dupliqué : une seule source de vérité).
+            const myPendingRequest = pendingValidations.find(
+              (p) => p.ownerId === playerId && p.roundId === currentRoundId && p.categorieId === category.id
+            );
+            const canResubmitInline =
+              myPendingRequest && Date.now() - new Date(myPendingRequest.createdAt).getTime() > RESUBMIT_AFTER_MS;
             return (
               <Animated.View
                 key={category.id ?? index}
@@ -537,8 +677,18 @@ export default function OnlineResultsScreen() {
                       <Text style={styles.noAnswer}>-</Text>
                     )}
                     {myAnswer?.word && !myAnswer.isValid && (
-                      pendingValidation.has(category.id) ? (
-                        <Text style={styles.validationPending}>En attente...</Text>
+                      myPendingRequest ? (
+                        canResubmitInline ? (
+                          <TouchableOpacity
+                            style={styles.validationButton}
+                            onPress={() => handleResubmitValidation(myPendingRequest)}
+                          >
+                            <HelpCircle size={13} color={colors.primary} />
+                            <Text style={styles.validationButtonText}>Toujours en attente — Redemander</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <Text style={styles.validationPending}>En attente...</Text>
+                        )
                       ) : (
                         <TouchableOpacity
                           style={styles.validationButton}
@@ -657,6 +807,17 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontWeight: '700',
     backgroundColor: colors.dangerSoft,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  bonusText: {
+    fontSize: 12,
+    color: colors.goldDeep,
+    marginTop: 6,
+    fontWeight: '700',
+    backgroundColor: colors.goldSoft,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,

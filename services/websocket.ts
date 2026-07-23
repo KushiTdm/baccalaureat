@@ -20,6 +20,21 @@ export interface RoundAnswerResult {
   points: number;
 }
 
+// Ligne brute d'une demande de validation manuelle non résolue, utilisée par
+// `fetchPendingValidations`/`PendingValidationsPanel`. `ownerId` désigne
+// toujours le propriétaire du mot à valider (jamais le votant).
+export interface PendingValidationRow {
+  id: string;
+  roundId: string;
+  roundNumber: number;
+  letter: string;
+  categorieId: number;
+  categorieName: string;
+  word: string;
+  ownerId: string;
+  createdAt: string;
+}
+
 export interface GameResult {
   playerId: string;
   playerName: string;
@@ -27,6 +42,11 @@ export interface GameResult {
   roundScore: number;
   validWordsCount: number;
   stoppedEarly?: boolean;
+  // Vérité serveur (game_round_scores.penalty_applied / stop_bonus > 0),
+  // recalculée à chaque validation manuelle — ne jamais dériver ces valeurs
+  // côté client (voir refreshCurrentRoundResults).
+  penaltyApplied?: boolean;
+  bonusApplied?: boolean;
   results?: RoundAnswerResult[];
 }
 
@@ -116,7 +136,7 @@ async function fetchRoundResults(roundId: string): Promise<GameResult[]> {
 
   const [{ data: players, error: playersError }, { data: scores }, { data: answers }] = await Promise.all([
     supabase.from('game_room_players').select('id, player_name, score').eq('room_id', round.room_id),
-    supabase.from('game_round_scores').select('player_id, round_score, valid_words_count, stopped_early').eq('round_id', roundId),
+    supabase.from('game_round_scores').select('player_id, round_score, valid_words_count, stopped_early, penalty_applied, stop_bonus').eq('round_id', roundId),
     supabase.from('game_room_answers').select('player_id, categorie_id, word, is_valid, points, categories(nom)').eq('round_id', roundId),
   ]);
   if (playersError) throw playersError;
@@ -143,6 +163,8 @@ async function fetchRoundResults(roundId: string): Promise<GameResult[]> {
       roundScore: s?.round_score || 0,
       validWordsCount: s?.valid_words_count || 0,
       stoppedEarly: s?.stopped_early || false,
+      penaltyApplied: s?.penalty_applied || false,
+      bonusApplied: !!(s?.stop_bonus && s.stop_bonus > 0),
       results: answersByPlayer.get(p.id) || [],
     };
   });
@@ -360,6 +382,60 @@ class WebSocketService {
 
     const { data: room } = await supabase.from('game_rooms').select('status').eq('id', roomDbId).maybeSingle();
     if (room) this.handleRoomUpdated(room);
+
+    // Rattrapage des demandes de validation manuelle : si une demande ou une
+    // réponse est arrivée pendant que ce client n'était pas encore abonné
+    // (transition d'écran, reconnexion réseau...), postgres_changes ne la
+    // rejoue jamais — on la relit donc explicitement depuis la table à
+    // chaque (ré)abonnement du canal (voir aussi syncWordValidationsForRound,
+    // appelé en plus par l'écran de résultats).
+    const { data: rows } = await supabase
+      .from('word_validation_votes')
+      .select('*')
+      .eq('room_id', roomDbId)
+      .order('created_at', { ascending: true });
+    for (const row of (rows || []) as WordValidationVoteRow[]) {
+      if (row.vote === null) this.handleWordValidationInserted(row);
+      else this.handleWordValidationUpdated(row);
+    }
+  }
+
+  /**
+   * Relit depuis la base toutes les demandes de validation manuelle d'une
+   * manche et les rejoue via les mêmes handlers que postgres_changes.
+   * Filet de sécurité appelé par l'écran de résultats (au montage + en
+   * polling léger) : compense les événements Realtime perdus lors d'une
+   * transition d'écran (voir handleWordValidationInserted/Updated — un
+   * événement reçu sans callback monté n'est plus jamais marqué "géré",
+   * donc il est bien redélivré ici dès qu'un callback est de nouveau prêt).
+   */
+  async syncWordValidationsForRound(roundId: string): Promise<void> {
+    const { data: rows } = await supabase
+      .from('word_validation_votes')
+      .select('*')
+      .eq('round_id', roundId)
+      .order('created_at', { ascending: true });
+    for (const row of (rows || []) as WordValidationVoteRow[]) {
+      if (row.vote === null) this.handleWordValidationInserted(row);
+      else this.handleWordValidationUpdated(row);
+    }
+  }
+
+  /**
+   * Relit le score autoritaire complet de la manche en cours (recalculé
+   * côté serveur à chaque validation manuelle : partage des mots dupliqués,
+   * pénalité remboursée, bonus de STOP...). À appeler après toute résolution
+   * de validation au lieu de patcher les points localement (une correction
+   * locale ad-hoc ne peut pas reproduire fidèlement ces règles).
+   */
+  async refreshCurrentRoundResults(): Promise<GameResult[] | null> {
+    if (!this.currentRoundId) return null;
+    try {
+      return await fetchRoundResults(this.currentRoundId);
+    } catch (error) {
+      console.error('❌ Rafraîchissement des résultats de manche échoué:', error);
+      return null;
+    }
   }
 
   private async ensureChannelReady(): Promise<void> {
@@ -447,8 +523,15 @@ class WebSocketService {
 
   private handleWordValidationInserted(row: WordValidationVoteRow) {
     if (this.handledValidationInserts.has(row.id)) return;
+    // Pas de callback monté (écran en transition) : NE PAS marquer comme
+    // géré, sinon cet événement serait perdu pour toujours — y compris pour
+    // le rattrapage explicite (syncWordValidationsForRound/catchUp), qui
+    // rejoue les mêmes lignes et serait alors bloqué par ce Set. C'est ce
+    // qui causait des demandes de validation jamais reçues par le second
+    // joueur, sans aucun moyen de les renvoyer.
+    if (!this.callbacks.onWordValidationVote) return;
     this.handledValidationInserts.add(row.id);
-    this.callbacks.onWordValidationVote?.({
+    this.callbacks.onWordValidationVote({
       voteId: row.id,
       playerId: row.player_id,
       categorieId: row.categorie_id,
@@ -459,8 +542,9 @@ class WebSocketService {
 
   private handleWordValidationUpdated(row: WordValidationVoteRow) {
     if (this.handledValidationUpdates.has(row.id)) return;
+    if (!this.callbacks.onWordValidationVote) return;
     this.handledValidationUpdates.add(row.id);
-    this.callbacks.onWordValidationVote?.({
+    this.callbacks.onWordValidationVote({
       voteId: row.id,
       playerId: row.player_id,
       categorieId: row.categorie_id,
@@ -604,20 +688,31 @@ class WebSocketService {
 
   /**
    * Demande la validation manuelle d'un de mes mots absent du dictionnaire.
-   * Idempotent côté serveur (pas de doublon tant que la demande précédente
-   * n'a pas encore reçu de vote). L'adversaire est notifié via
-   * `onWordValidationVote` (postgres_changes INSERT sur word_validation_votes).
+   * Idempotent côté serveur pendant ~20s (pas de doublon tant que la demande
+   * précédente n'a pas encore reçu de vote) ; passé ce délai, le serveur
+   * relance pour de vrai (nouvel id/timestamp) — voir
+   * `requestWordValidation` côté edge function. `roundId` est optionnel : par
+   * défaut la manche courante (bouton "Demander validation" pendant l'écran
+   * de résultats), mais le panneau persistant de validations en attente
+   * (`PendingValidationsPanel`) doit pouvoir relancer une demande orpheline
+   * d'une manche PRÉCÉDENTE — d'où la possibilité de le préciser.
    */
-  async requestWordValidation(categorieId: number, categorieName: string, word: string): Promise<boolean> {
+  async requestWordValidation(
+    categorieId: number,
+    categorieName: string,
+    word: string,
+    roundId?: string
+  ): Promise<boolean> {
     try {
       await this.ensureChannelReady();
-      if (!this.currentRoundId || !this.currentPlayerId || !this.currentRoomDbId) {
+      const targetRoundId = roundId || this.currentRoundId;
+      if (!targetRoundId || !this.currentPlayerId || !this.currentRoomDbId) {
         throw new Error('Manche, joueur ou room inconnu');
       }
       const data = await this.invoke({
         action: 'request-word-validation',
         roomId: this.currentRoomDbId,
-        roundId: this.currentRoundId,
+        roundId: targetRoundId,
         playerId: this.currentPlayerId,
         categorieId,
         categorieName,
@@ -634,9 +729,12 @@ class WebSocketService {
 
   /**
    * Répond à une demande de validation manuelle reçue de l'adversaire. Si
-   * approuvé, l'Edge Function corrige les scores (recalcul complet) et
-   * soumet le(s) mot(s) validés au gate IA de dictionnaire (clé locale si
-   * configurée — voir store/settingsStore.ts).
+   * approuvé, l'Edge Function corrige les scores (recalcul complet, rapide)
+   * et lance en tâche de fond le gate IA de dictionnaire (clé locale si
+   * configurée — voir store/settingsStore.ts), sans faire attendre cette
+   * réponse. `data.vote` peut être `null` si la demande a été supprimée
+   * entre-temps (relance côté demandeur sur une entrée déjà périmée du
+   * panneau) : pas une erreur, on l'ignore simplement.
    */
   async respondWordValidation(voteId: string, approved: boolean): Promise<boolean> {
     try {
@@ -655,6 +753,37 @@ class WebSocketService {
       this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       return false;
     }
+  }
+
+  /**
+   * Instantané (non événementiel) de toutes les demandes de validation
+   * manuelle encore sans réponse dans la room, TOUTES manches confondues.
+   * Alimente `PendingValidationsPanel` : un simple polling de cette requête
+   * suffit à faire réapparaître une demande qui aurait été perdue côté
+   * Realtime/Alert, sans dépendre des Sets de dédoublonnage internes.
+   */
+  async fetchPendingValidations(roomId: string): Promise<PendingValidationRow[]> {
+    const { data, error } = await supabase
+      .from('word_validation_votes')
+      .select('id, round_id, categorie_id, word, player_id, created_at, categories(nom), game_rounds(round_number, letter)')
+      .eq('room_id', roomId)
+      .is('vote', null)
+      .order('created_at', { ascending: true });
+    if (error) {
+      console.error('❌ Lecture des validations en attente échouée:', error);
+      return [];
+    }
+    return (data || []).map((v: any) => ({
+      id: v.id,
+      roundId: v.round_id,
+      roundNumber: v.game_rounds?.round_number || 0,
+      letter: v.game_rounds?.letter || '',
+      categorieId: v.categorie_id,
+      categorieName: v.categories?.nom || '',
+      word: v.word,
+      ownerId: v.player_id,
+      createdAt: v.created_at,
+    }));
   }
 
   disconnect() {
@@ -687,6 +816,10 @@ class WebSocketService {
 
   getCurrentPlayerId(): string | null {
     return this.currentPlayerId;
+  }
+
+  getCurrentRoundId(): string | null {
+    return this.currentRoundId;
   }
 }
 

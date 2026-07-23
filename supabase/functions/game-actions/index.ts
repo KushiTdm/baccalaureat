@@ -28,6 +28,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { checkWordsBatch, isSafeCandidateWord, WordCheckResult } from "../_shared/gemini.ts";
+import { log } from "../_shared/logger.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -54,6 +55,10 @@ function normalizeWord(word: string): string {
 // importer directement les fichiers React Native).
 const GAME_LETTERS = "ABCDEFGHIJLMNOPRSTUV".split("");
 
+// Délai avant qu'une demande de validation manuelle non répondue puisse être
+// relancée pour de vrai (voir requestWordValidation).
+const RESUBMIT_AFTER_MS = 20000;
+
 type RoundAnswerResult = {
   categorieId: number;
   categorieName: string;
@@ -72,9 +77,10 @@ Deno.serve(async (req: Request) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
+  let action: string | undefined;
   try {
     const body = await req.json();
-    const { action } = body;
+    action = body.action;
 
     switch (action) {
       case "start-round":
@@ -98,6 +104,14 @@ Deno.serve(async (req: Request) => {
     }
   } catch (error) {
     console.error("game-actions error:", error);
+    // Journal persistant (table app_logs) : consultable après coup, contrairement
+    // aux logs éphémères de la fonction. Jamais bloquant si ça échoue.
+    await log(supabase, {
+      source: "game-actions",
+      level: "error",
+      action,
+      message: (error as Error).message || String(error),
+    });
     return json({ error: (error as Error).message || "Erreur serveur" }, 500);
   }
 });
@@ -461,14 +475,18 @@ async function recomputeRoundScores(supabase: SupabaseClient, roundId: string) {
 
     const penalty = scoreRow.stopped_early && allFieldsFilled && hasInvalidWord ? 3 : 0;
 
+    // Bonus de STOP : ne dépend plus que du stoppeur lui-même (grille pleine
+    // + 100% valide + aucune validation en attente). La version précédente
+    // exigeait en plus que l'adversaire ait AUSSI une grille pleine, ce qui
+    // le rendait quasiment inobtenable en pratique (l'adversaire a rarement
+    // fini au moment où le stoppeur clique STOP) — retiré à la demande de
+    // l'utilisateur après vérification sur une vraie partie (manche 7 :
+    // stoppeur 7/7 valides, bonus refusé uniquement car l'adversaire n'avait
+    // rempli que 5/7 catégories).
     let bonus = 0;
     const isStopper = round.stopped_reason === "manual" && round.stopped_by === playerId;
     if (isStopper && allFieldsFilled && !hasInvalidWord && noPendingValidation) {
-      const opponentIds = playerIds.filter((id) => id !== playerId);
-      const opponentAllFilled =
-        opponentIds.length > 0 &&
-        opponentIds.every((oid) => (answersByPlayer.get(oid) || []).length === catCount);
-      if (opponentAllFilled) bonus = 3;
+      bonus = 3;
     }
 
     const round_score = Math.max(0, roundPoints - penalty + bonus);
@@ -489,11 +507,17 @@ async function recomputeRoundScores(supabase: SupabaseClient, roundId: string) {
   await resyncPlayerTotals(supabase, round.room_id);
 }
 
-/** Resynchronise le score cumulé de chaque joueur = somme de TOUS ses
- * round_score dans la room (jamais un `+=` incrémental). */
+/** Resynchronise le score cumulé de chaque joueur = somme de ses round_score
+ * dans la room (jamais un `+=` incrémental). Ne compte que les manches
+ * `finished` : une manche encore `playing` peut avoir une ligne
+ * `game_round_scores` provisoire (valeur envoyée par le premier joueur à
+ * soumettre, avant que `finalizeRound` ne l'écrase) — l'inclure ferait
+ * fuiter cette valeur non définitive dans le total affiché, en particulier
+ * si une validation d'une manche PRÉCÉDENTE se résout pendant la fenêtre
+ * stop→finalisation de la manche en cours. */
 async function resyncPlayerTotals(supabase: SupabaseClient, roomId: string) {
   const [{ data: rounds }, { data: players }] = await Promise.all([
-    supabase.from("game_rounds").select("id").eq("room_id", roomId),
+    supabase.from("game_rounds").select("id").eq("room_id", roomId).eq("status", "finished"),
     supabase.from("game_room_players").select("id").eq("room_id", roomId),
   ]);
   const roundIds = (rounds || []).map((r) => r.id);
@@ -565,6 +589,7 @@ async function runDictionaryAIGate(supabase: SupabaseClient, roundId: string, ge
   let verdicts: WordCheckResult[] = [];
   try {
     verdicts = await checkWordsBatch(
+      supabase,
       geminiApiKey,
       stillNeedsCheck.map((v) => ({
         word: v.word,
@@ -612,7 +637,7 @@ async function buildResults(supabase: SupabaseClient, round: { id: string; room_
 
   const { data: scores } = await supabase
     .from("game_round_scores")
-    .select("player_id, round_score, valid_words_count, stopped_early")
+    .select("player_id, round_score, valid_words_count, stopped_early, penalty_applied, stop_bonus")
     .eq("round_id", round.id);
 
   const { data: answers } = await supabase
@@ -642,6 +667,8 @@ async function buildResults(supabase: SupabaseClient, round: { id: string; room_
       roundScore: s?.round_score || 0,
       validWordsCount: s?.valid_words_count || 0,
       stoppedEarly: s?.stopped_early || false,
+      penaltyApplied: s?.penalty_applied || false,
+      bonusApplied: !!(s?.stop_bonus && s.stop_bonus > 0),
       results: answersByPlayer.get(p.id) || [],
     };
   });
@@ -699,8 +726,14 @@ async function requestWordValidation(
   if (answerError) throw answerError;
   if (!answer) throw new Error("Réponse introuvable pour cette catégorie");
 
-  // Idempotent : une demande déjà en attente (pas encore votée) pour ce mot
-  // existe-t-elle ? Évite d'inonder l'adversaire de plusieurs alertes.
+  // Idempotent tant que la demande est récente : évite d'inonder l'adversaire
+  // de plusieurs alertes si le joueur clique plusieurs fois de suite. Passé
+  // RESUBMIT_AFTER_MS sans réponse, on considère que la première tentative
+  // a pu se perdre (file d'attente Alert.alert saturée côté destinataire) et
+  // on relance pour de vrai : DELETE + INSERT (pas un UPDATE) pour produire
+  // une ligne avec un nouvel id/timestamp, seule façon de garantir un
+  // nouvel évènement Realtime — un simple UPDATE de created_at serait
+  // absorbé comme "déjà vu" par les Sets de dédoublonnage du client.
   const { data: existing } = await supabase
     .from("word_validation_votes")
     .select("*")
@@ -709,7 +742,13 @@ async function requestWordValidation(
     .eq("categorie_id", categorieId)
     .is("vote", null)
     .maybeSingle();
-  if (existing) return { vote: existing, created: false };
+  if (existing) {
+    const ageMs = Date.now() - new Date(existing.created_at).getTime();
+    if (ageMs < RESUBMIT_AFTER_MS) {
+      return { vote: existing, created: false };
+    }
+    await supabase.from("word_validation_votes").delete().eq("id", existing.id);
+  }
 
   const { data: vote, error } = await supabase
     .from("word_validation_votes")
@@ -743,13 +782,16 @@ async function respondWordValidation(
     .maybeSingle();
 
   if (!vote) {
-    const { data: current, error } = await supabase
+    // La ligne peut avoir été supprimée entre-temps (relance côté demandeur,
+    // voir requestWordValidation) : l'adversaire a pu répondre à une entrée
+    // du panneau déjà périmée. Pas une erreur serveur — le client relit
+    // simplement l'état à jour (une nouvelle demande, le cas échéant).
+    const { data: current } = await supabase
       .from("word_validation_votes")
       .select("*")
       .eq("id", voteId)
-      .single();
-    if (error) throw error;
-    return { vote: current };
+      .maybeSingle();
+    return { vote: current, gone: !current };
   }
 
   if (approved) {
@@ -774,14 +816,29 @@ async function respondWordValidation(
   }
 
   // Recalcul complet : applique le partage de points si mot dupliqué,
-  // rembourse une pénalité devenue caduque, etc.
+  // rembourse une pénalité devenue caduque, etc. Volontairement RAPIDE (pas
+  // d'appel réseau externe) : c'est tout ce que le client attend pour
+  // rafraîchir son affichage.
   await recomputeRoundScores(supabase, vote.round_id);
 
   // Le round est déjà "finished" à ce stade (toute validation manuelle a
   // lieu APRÈS finalizeRound, une fois les résultats affichés) : c'est ICI,
   // pas dans finalizeRound, que le gate IA groupé doit tourner à chaque
   // validation résolue (il ne retraite jamais un mot déjà `ai_checked_at`).
-  await runDictionaryAIGate(supabase, vote.round_id, geminiApiKey);
+  // Lancé en tâche de fond (jamais attendu) : l'appel Gemini peut prendre
+  // plusieurs secondes (throttle + réseau) et n'a AUCUN rapport avec le
+  // score de la manche (déjà figé par recomputeRoundScores ci-dessus) — le
+  // faire attendre par le joueur qui vient de répondre "Oui" ne fait que
+  // donner l'impression que le score reste "bloqué" le temps de l'appel. Le
+  // panneau "Mots soumis au dictionnaire" (état ⏳) se met à jour tout seul
+  // via le polling existant dès que le verdict IA arrive.
+  const aiGate = runDictionaryAIGate(supabase, vote.round_id, geminiApiKey).catch((e) => {
+    console.error("runDictionaryAIGate (tâche de fond) échouée:", e);
+  });
+  const runtime = (globalThis as any).EdgeRuntime;
+  if (runtime?.waitUntil) {
+    runtime.waitUntil(aiGate);
+  }
 
   return { vote };
 }

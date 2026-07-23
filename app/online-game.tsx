@@ -8,7 +8,8 @@ import Timer from '../components/Timer';
 import Button from '../components/Button';
 import { validateWord } from '../services/api';
 import { startsWithLetter } from '../utils/normalize';
-import { websocketService, RoundAnswerResult } from '../services/websocket';
+import { websocketService, RoundAnswerResult, PendingValidationRow } from '../services/websocket';
+import PendingValidationsPanel from '../components/PendingValidationsPanel';
 import { feedback } from '../services/feedback';
 import { Send, Zap, Users, Trophy, AlertCircle } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -54,6 +55,13 @@ export default function OnlineGameScreen() {
   // Score cumulé autoritaire (game_room_players.score), tenu à jour en
   // direct via onScoreUpdated — jamais une reconstruction locale.
   const [liveScores, setLiveScores] = useState<{ my: number; opponent: number } | null>(null);
+  // Demandes de validation manuelle encore sans réponse dans la room (toutes
+  // manches confondues) : une manche précédente peut en avoir laissé en
+  // suspens si personne n'y a répondu avant que la manche suivante démarre
+  // (l'écran de résultats, seul endroit où on pouvait y répondre jusqu'ici,
+  // était déjà quitté) — affichées ici aussi pour qu'elles restent
+  // traitables sans revenir en arrière.
+  const [pendingValidations, setPendingValidations] = useState<PendingValidationRow[]>([]);
 
   // Garde-fous (refs pour éviter les stale closures dans les callbacks socket)
   const finishedRef = useRef(false);   // j'ai déjà déclenché/reçu le STOP
@@ -64,6 +72,21 @@ export default function OnlineGameScreen() {
 
   const roomId = websocketService.getCurrentRoomId();
   const playerId = websocketService.getCurrentPlayerId();
+
+  const refreshPendingValidations = useCallback(async () => {
+    const roomDbId = websocketService.getCurrentRoomDbId();
+    if (!roomDbId) return;
+    const rows = await websocketService.fetchPendingValidations(roomDbId);
+    setPendingValidations(rows);
+  }, []);
+
+  const handleRespondValidation = useCallback((voteId: string, approved: boolean) => {
+    websocketService.respondWordValidation(voteId, approved).then(() => refreshPendingValidations());
+  }, [refreshPendingValidations]);
+
+  const handleResubmitValidation = useCallback((row: PendingValidationRow) => {
+    websocketService.requestWordValidation(row.categorieId, row.categorieName, row.word, row.roundId).then(() => refreshPendingValidations());
+  }, [refreshPendingValidations]);
 
   // Valide mes réponses localement, calcule le score (avec pénalité) et soumet
   const validateAndSubmit = useCallback(async (stoppedEarly: boolean) => {
@@ -245,9 +268,20 @@ export default function OnlineGameScreen() {
         const opp = data.results.find((r) => r.playerId !== playerId);
 
         if (me) {
-          s.setMultiplayerResults(me.results || [], me.roundScore || 0, me.stoppedEarly || false);
+          s.setMultiplayerResults(
+            me.results || [],
+            me.roundScore || 0,
+            me.stoppedEarly || false,
+            me.bonusApplied || false,
+            me.penaltyApplied || false
+          );
         }
-        s.setOpponentResults(opp?.results || [], opp?.roundScore || 0);
+        s.setOpponentResults(opp?.results || [], opp?.roundScore || 0, opp?.bonusApplied || false, opp?.penaltyApplied || false);
+        // Score CUMULÉ réel (game_room_players.score, déjà à jour à ce stade
+        // puisque la manche vient d'être finalisée côté serveur) — source de
+        // vérité pour le "Score total" affiché sur l'écran de résultats, qui
+        // ne doit plus jamais être une somme locale de roundHistory.
+        s.setServerTotals(me?.totalScore ?? s.serverTotalScore, opp?.totalScore ?? s.serverOpponentTotalScore);
 
         router.replace('/online-results');
       },
@@ -286,14 +320,36 @@ export default function OnlineGameScreen() {
           const next = prev || { my: 0, opponent: 0 };
           return updatedId === playerId ? { ...next, my: score } : { ...next, opponent: score };
         });
+        // Répercuté dans le store (pas seulement le state local de cet
+        // écran) pour que l'écran de résultats hérite immédiatement de la
+        // valeur à jour, y compris quand la mise à jour concerne une manche
+        // déjà passée (validation manuelle résolue tardivement).
+        const s = useGameStore.getState();
+        if (updatedId === playerId) {
+          s.setServerTotals(score, s.serverOpponentTotalScore);
+        } else {
+          s.setServerTotals(s.serverTotalScore, score);
+        }
+      },
+
+      // Une demande de validation orpheline d'une manche précédente (voir
+      // PendingValidationsPanel) peut être résolue pendant qu'on est déjà en
+      // train de jouer la manche suivante : rafraîchit juste la liste, le
+      // panneau ci-dessous gère le reste.
+      onWordValidationVote: () => {
+        refreshPendingValidations();
       },
     });
+
+    refreshPendingValidations();
+    const pendingPollInterval = setInterval(refreshPendingValidations, 5000);
 
     return () => {
       // On garde la connexion vivante pour l'écran de résultats / manches
       // suivantes, mais on nettoie nos timers locaux.
       if (stopFallbackRef.current) clearTimeout(stopFallbackRef.current);
       if (resultsFallbackRef.current) clearTimeout(resultsFallbackRef.current);
+      clearInterval(pendingPollInterval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -373,6 +429,14 @@ export default function OnlineGameScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+        <PendingValidationsPanel
+          pending={pendingValidations}
+          myPlayerId={playerId || ''}
+          opponentName={opponentName || ''}
+          onRespond={handleRespondValidation}
+          onResubmit={handleResubmitValidation}
+        />
+
         {categories.map((category, index) => {
           const answer = answers.find((a) => a.categorieId === category.id);
           return (

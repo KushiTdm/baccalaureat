@@ -56,6 +56,24 @@ type GameState = {
   opponentName: string | null;
   opponentResults: GameResult[] | null;
   opponentScore: number;
+  // Bonus/pénalité de STOP (vérité serveur, game_round_scores.stop_bonus /
+  // penalty_applied) — celui des deux joueurs qui a crié STOP peut être
+  // n'importe lequel des deux, d'où un champ pour chaque côté plutôt qu'un
+  // seul "mien".
+  bonusApplied: boolean;
+  penaltyApplied: boolean;
+  opponentBonusApplied: boolean;
+  opponentPenaltyApplied: boolean;
+  // Score CUMULÉ réel (game_room_players.score, vérité serveur), tenu à jour
+  // en direct par onScoreUpdated et par tout refetch de manche — jamais une
+  // somme locale de roundHistory, qui peut diverger si l'historique a été
+  // committé avant qu'une validation manuelle tardive ne mette à jour le
+  // score de sa manche (bug identifié : "Score total" affiché faux en cours
+  // de partie malgré un serveur parfaitement cohérent). `serverTotalsReady`
+  // distingue "pas encore reçu" de "vraiment à 0".
+  serverTotalScore: number;
+  serverOpponentTotalScore: number;
+  serverTotalsReady: boolean;
 
   // Round system state
   currentRound: number;
@@ -79,8 +97,19 @@ type GameState = {
   setIsHost: (isHost: boolean) => void;
   startGame: (letter: string, categories: Categorie[], durationSec?: number) => void;
   startMultiplayerGame: (letter: string, categories: Categorie[], isHost: boolean, opponentName: string) => void;
-  setMultiplayerResults: (myResults: GameResult[], myScore: number, stoppedEarly?: boolean) => void;
-  setOpponentResults: (results: GameResult[], score: number) => void;
+  setMultiplayerResults: (
+    myResults: GameResult[],
+    myScore: number,
+    stoppedEarly?: boolean,
+    bonusApplied?: boolean,
+    penaltyApplied?: boolean
+  ) => void;
+  setOpponentResults: (
+    results: GameResult[],
+    score: number,
+    bonusApplied?: boolean,
+    penaltyApplied?: boolean
+  ) => void;
   endGame: () => void;
   resetGame: () => void;
   setTimeRemaining: (time: number | ((prev: number) => number)) => void;
@@ -98,6 +127,8 @@ type GameState = {
   // corrige un résultat déjà soumis et recalcule le score correspondant.
   patchOwnResult: (categorieId: number, updates: Partial<GameResult>) => void;
   patchOpponentResult: (categorieId: number, updates: Partial<GameResult>) => void;
+
+  setServerTotals: (myTotal: number, opponentTotal: number) => void;
 };
 
 export const useGameStore = create<GameState>((set) => ({
@@ -117,6 +148,13 @@ export const useGameStore = create<GameState>((set) => ({
   opponentName: null,
   opponentResults: null,
   opponentScore: 0,
+  bonusApplied: false,
+  penaltyApplied: false,
+  opponentBonusApplied: false,
+  opponentPenaltyApplied: false,
+  serverTotalScore: 0,
+  serverOpponentTotalScore: 0,
+  serverTotalsReady: false,
 
   // Round system state
   currentRound: 1,
@@ -174,6 +212,13 @@ export const useGameStore = create<GameState>((set) => ({
       opponentName: null,
       opponentResults: null,
       opponentScore: 0,
+      bonusApplied: false,
+      penaltyApplied: false,
+      opponentBonusApplied: false,
+      opponentPenaltyApplied: false,
+      serverTotalScore: 0,
+      serverOpponentTotalScore: 0,
+      serverTotalsReady: false,
       currentRound: 1,
       roundHistory: [],
       stoppedEarly: false,
@@ -202,6 +247,13 @@ export const useGameStore = create<GameState>((set) => ({
       opponentName,
       opponentResults: null,
       opponentScore: 0,
+      bonusApplied: false,
+      penaltyApplied: false,
+      opponentBonusApplied: false,
+      opponentPenaltyApplied: false,
+      serverTotalScore: 0,
+      serverOpponentTotalScore: 0,
+      serverTotalsReady: false,
       currentRound: 1,
       roundHistory: [],
       stoppedEarly: false,
@@ -210,17 +262,28 @@ export const useGameStore = create<GameState>((set) => ({
       dictionaryHistory: [],
     }),
 
-  setMultiplayerResults: (myResults, myScore, stoppedEarly = false) =>
+  setMultiplayerResults: (myResults, myScore, stoppedEarly = false, bonusApplied = false, penaltyApplied = false) =>
     set({
       results: myResults,
       score: myScore,
       stoppedEarly,
+      bonusApplied,
+      penaltyApplied,
     }),
 
-  setOpponentResults: (results, score) =>
+  setOpponentResults: (results, score, bonusApplied = false, penaltyApplied = false) =>
     set({
       opponentResults: results,
       opponentScore: score,
+      opponentBonusApplied: bonusApplied,
+      opponentPenaltyApplied: penaltyApplied,
+    }),
+
+  setServerTotals: (myTotal, opponentTotal) =>
+    set({
+      serverTotalScore: myTotal,
+      serverOpponentTotalScore: opponentTotal,
+      serverTotalsReady: true,
     }),
 
   endGame: () => set({ isPlaying: false, roundEndsAt: null }),
@@ -240,6 +303,13 @@ export const useGameStore = create<GameState>((set) => ({
       opponentName: null,
       opponentResults: null,
       opponentScore: 0,
+      bonusApplied: false,
+      penaltyApplied: false,
+      opponentBonusApplied: false,
+      opponentPenaltyApplied: false,
+      serverTotalScore: 0,
+      serverOpponentTotalScore: 0,
+      serverTotalsReady: false,
       currentRound: 1,
       roundHistory: [],
       stoppedEarly: false,
@@ -281,6 +351,10 @@ export const useGameStore = create<GameState>((set) => ({
       endGameRequestReceived: false,
       opponentResults: null,
       opponentScore: 0,
+      bonusApplied: false,
+      penaltyApplied: false,
+      opponentBonusApplied: false,
+      opponentPenaltyApplied: false,
     })),
 
   addRoundToHistory: (round) =>

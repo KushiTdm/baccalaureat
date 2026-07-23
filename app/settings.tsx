@@ -8,9 +8,16 @@ import { useSettingsStore, ROUND_DURATIONS } from '../store/settingsStore';
 import { getCategories } from '../services/api';
 import { Categorie, supabase } from '../lib/supabase';
 import { GAME_LETTERS } from '../utils/letters';
+import { testGeminiKey } from '../utils/geminiClient';
+import { logAppError } from '../services/errorLog';
 import { colors, fonts, radius, spacing, shadow } from '../constants/theme';
 
-const ENRICH_COOLDOWN_MS = 15000;
+const ENRICH_COOLDOWN_BASE_MS = 15000;
+// Espacement appliqué par generateWordsForLetter côté serveur (niveau
+// gratuit gemini-flash-latest) : le cooldown local suit le même ordre de
+// grandeur pour ne pas donner l'impression que le bouton est "cassé"
+// pendant qu'un lot de plusieurs thèmes tourne encore côté serveur.
+const ENRICH_PER_CATEGORY_MS = 7000;
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -37,6 +44,8 @@ export default function SettingsScreen() {
   const [enriching, setEnriching] = useState(false);
   const [cooldownUntil, setCooldownUntil] = useState(0);
   const [enrichSummary, setEnrichSummary] = useState<string | null>(null);
+  const [testingKey, setTestingKey] = useState(false);
+  const [keyTestResult, setKeyTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [, forceTick] = useState(0);
 
   useEffect(() => {
@@ -45,6 +54,19 @@ export default function SettingsScreen() {
       .catch(() => setCategories([]))
       .finally(() => setLoadingCats(false));
   }, []);
+
+  // `loadSettings()` (app/_layout.tsx, lecture AsyncStorage) est asynchrone et
+  // peut résoudre APRÈS le montage de cet écran : `useState(geminiApiKey)`
+  // n'aurait alors capturé qu'une valeur encore vide, sans se remettre à jour
+  // quand le store se peuple ensuite — la clé semblait "ne pas être
+  // mémorisée" alors qu'elle l'était bien en local. On resynchronise dès que
+  // le store reçoit une clé, sans écraser une saisie déjà en cours.
+  useEffect(() => {
+    if (!keyInput && geminiApiKey) {
+      setKeyInput(geminiApiKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geminiApiKey]);
 
   // Réaffiche le bouton "Générer des mots" une fois le cooldown écoulé.
   useEffect(() => {
@@ -61,17 +83,45 @@ export default function SettingsScreen() {
     );
   };
 
+  const handleTestKey = async () => {
+    const key = keyInput.trim();
+    if (!key) {
+      Alert.alert('Clé Gemini requise', 'Colle une clé avant de la tester.');
+      return;
+    }
+    setGeminiApiKey(key);
+    setTestingKey(true);
+    setKeyTestResult(null);
+    try {
+      const result = await testGeminiKey(key);
+      setKeyTestResult(result);
+      if (!result.ok) {
+        logAppError('gemini-key-test', result.message);
+      }
+    } finally {
+      setTestingKey(false);
+    }
+  };
+
   const handleEnrich = async () => {
-    if (!geminiApiKey) {
+    // On utilise le champ local (keyInput), pas le store : ce dernier n'est
+    // mis à jour qu'au blur du TextInput (onBlur), donc si l'utilisateur
+    // tape sa clé puis appuie directement sur le bouton sans faire perdre le
+    // focus au champ, `geminiApiKey` (store) était encore vide et le bouton
+    // — désactivé sur cette même condition — restait bloqué non cliquable.
+    const key = keyInput.trim();
+    if (!key) {
       Alert.alert('Clé Gemini requise', "L'ajout de mots au dictionnaire n'est disponible qu'avec une clé API valide.");
       return;
     }
+    setGeminiApiKey(key);
     setEnriching(true);
     setEnrichSummary(null);
+    const targetCount = enrichCategoryIds.length > 0 ? enrichCategoryIds.length : categories.length || 1;
     try {
       const { data, error } = await supabase.functions.invoke('dictionary-enrich', {
         body: {
-          geminiApiKey,
+          geminiApiKey: key,
           letter: enrichLetter,
           categorieIds: enrichCategoryIds.length > 0 ? enrichCategoryIds : undefined,
         },
@@ -85,10 +135,14 @@ export default function SettingsScreen() {
           : 'toutes catégories';
       setEnrichSummary(`${total} mot(s) ajouté(s) pour la lettre ${enrichLetter} (${themeLabel}).`);
     } catch (e) {
-      setEnrichSummary(`Erreur : ${(e as Error).message || 'échec de la génération'}`);
+      const message = (e as Error).message || 'échec de la génération';
+      setEnrichSummary(`Erreur : ${message}`);
+      logAppError('dictionary-enrich-client', message, { letter: enrichLetter, categorieIds: enrichCategoryIds });
     } finally {
       setEnriching(false);
-      setCooldownUntil(Date.now() + ENRICH_COOLDOWN_MS);
+      // Le serveur espace déjà chaque catégorie d'~7s (niveau gratuit) : le
+      // cooldown local suit la même durée totale pour rester cohérent.
+      setCooldownUntil(Date.now() + Math.max(ENRICH_COOLDOWN_BASE_MS, targetCount * ENRICH_PER_CATEGORY_MS));
     }
   };
 
@@ -227,7 +281,10 @@ export default function SettingsScreen() {
             <TextInput
               style={styles.keyInput}
               value={keyInput}
-              onChangeText={setKeyInput}
+              onChangeText={(text) => {
+                setKeyInput(text);
+                setKeyTestResult(null);
+              }}
               onBlur={() => setGeminiApiKey(keyInput)}
               placeholder="Coller la clé API Gemini ici"
               placeholderTextColor={colors.textMuted}
@@ -235,6 +292,23 @@ export default function SettingsScreen() {
               autoCapitalize="none"
               autoCorrect={false}
             />
+            <TouchableOpacity
+              style={[styles.testKeyButton, (testingKey || !keyInput.trim()) && styles.enrichButtonDisabled]}
+              onPress={handleTestKey}
+              disabled={testingKey || !keyInput.trim()}
+            >
+              {testingKey ? (
+                <ActivityIndicator color={colors.primary} size="small" />
+              ) : (
+                <Text style={styles.testKeyButtonText}>Tester la clé</Text>
+              )}
+            </TouchableOpacity>
+            {keyTestResult && (
+              <Text style={keyTestResult.ok ? styles.keyTestOk : styles.keyTestError}>
+                {keyTestResult.ok ? '✅ ' : '❌ '}
+                {keyTestResult.message}
+              </Text>
+            )}
 
             <Text style={[styles.cardHint, { marginTop: spacing.lg }]}>Lettre à enrichir</Text>
             <View style={styles.categoriesWrap}>
@@ -272,9 +346,9 @@ export default function SettingsScreen() {
             </View>
 
             <TouchableOpacity
-              style={[styles.enrichButton, (enriching || onCooldown || !geminiApiKey) && styles.enrichButtonDisabled]}
+              style={[styles.enrichButton, (enriching || onCooldown || !keyInput.trim()) && styles.enrichButtonDisabled]}
               onPress={handleEnrich}
-              disabled={enriching || onCooldown || !geminiApiKey}
+              disabled={enriching || onCooldown || !keyInput.trim()}
             >
               {enriching ? (
                 <ActivityIndicator color={colors.onPrimary} />
@@ -456,6 +530,33 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm + 2,
     fontSize: 14,
     color: colors.text,
+  },
+  testKeyButton: {
+    marginTop: spacing.sm,
+    alignSelf: 'flex-start',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.primaryBorder,
+    backgroundColor: colors.primarySoft,
+  },
+  testKeyButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  keyTestOk: {
+    marginTop: spacing.sm,
+    fontSize: 12,
+    color: colors.success,
+    fontWeight: '600',
+  },
+  keyTestError: {
+    marginTop: spacing.sm,
+    fontSize: 12,
+    color: colors.danger,
+    fontWeight: '600',
   },
   enrichButton: {
     marginTop: spacing.lg,
